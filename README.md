@@ -99,6 +99,12 @@ ditto -c -k --sequesterRsrc --keepParent dist/AudioTranscriber.app dist/AudioTra
 
 当前项目未做正式签名和 notarization。测试时如果 macOS 拦截，可以右键 App 后选择“打开”。
 
+也可以直接运行脚本：
+
+```bash
+./scripts/package_macos_app.sh
+```
+
 ## 使用说明
 
 1. 启动 App。
