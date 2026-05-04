@@ -7,29 +7,60 @@ struct StatusCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(Color(hex: "4EC9B0"))
-                Text("环境检测")
+                    .foregroundColor(envChecker.hasChecked ? Color(hex: "4EC9B0") : Color(hex: "F5A623"))
+                Text(envChecker.hasChecked ? "环境已预热" : "环境预热")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
-                Button(action: { envChecker.check() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(hex: "A0A0B0"))
+                Button(action: { envChecker.warmUp() }) {
+                    HStack(spacing: 6) {
+                        if envChecker.isChecking {
+                            ProgressView()
+                                .scaleEffect(0.55)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: envChecker.hasChecked ? "arrow.clockwise" : "flame.fill")
+                                .font(.system(size: 12))
+                        }
+                        Text(envChecker.isChecking ? "预热中" : (envChecker.hasChecked ? "重新预热" : "预热环境"))
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(hex: "7C6FE3"))
+                    .cornerRadius(7)
                 }
                 .buttonStyle(.plain)
+                .disabled(envChecker.isChecking)
             }
 
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible()),
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 10) {
-                ForEach(envChecker.deps) { dep in
-                    DependencyItem(dep: dep)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(envChecker.checkProgress)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                    .lineLimit(3)
+
+                if envChecker.isChecking {
+                    ProgressView()
+                        .progressViewStyle(LinearProgressViewStyle(tint: Color(hex: "7C6FE3")))
                 }
             }
+
+            if !envChecker.deps.isEmpty {
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible()),
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: 10) {
+                    ForEach(envChecker.deps) { dep in
+                        DependencyItem(dep: dep)
+                    }
+                }
+            }
+
+            PerformanceProfileRow(profile: envChecker.performanceProfile)
 
             if hasMissingRequirements {
                 VStack(alignment: .leading, spacing: 8) {
@@ -86,6 +117,25 @@ struct StatusCard: View {
 
     private var isMissingModels: Bool {
         envChecker.deps.contains { $0.name == "models" && !$0.isReady }
+    }
+}
+
+struct PerformanceProfileRow: View {
+    let profile: PerformanceProfile
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "speedometer")
+                .foregroundColor(Color(hex: "4EC9B0"))
+            Text(profile.summary)
+                .font(.system(size: 11))
+                .foregroundColor(Color(hex: "A0A0B0"))
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(10)
+        .background(Color(hex: "1E1E2E"))
+        .cornerRadius(8)
     }
 }
 

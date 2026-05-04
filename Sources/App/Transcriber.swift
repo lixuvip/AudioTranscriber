@@ -18,7 +18,7 @@ class Transcriber: ObservableObject {
         return URL(fileURLWithPath: "../../../Scripts") // fallback only for dev, not used in built app
     }
 
-    func startTranscription(audioURL: URL?, outputDir: URL?, pythonPath: String, pythonSitePackages: String = "") {
+    func startTranscription(audioURL: URL?, outputDir: URL?, pythonPath: String, pythonSitePackages: String = "", performanceProfile: PerformanceProfile = .automatic) {
         guard let audioURL = audioURL else { return }
         let outDir = outputDir ?? audioURL.deletingLastPathComponent()
 
@@ -30,15 +30,24 @@ class Transcriber: ObservableObject {
 
         let scriptPath = bundleScriptsDir.appendingPathComponent("transcribe.py").path
         var env = ProcessInfo.processInfo.environment
-        env["OMP_NUM_THREADS"] = "10"
-        env["MKL_NUM_THREADS"] = "10"
+        env["OMP_NUM_THREADS"] = "\(performanceProfile.threads)"
+        env["MKL_NUM_THREADS"] = "\(performanceProfile.threads)"
         if !pythonSitePackages.isEmpty {
             env["PYTHONPATH"] = pythonSitePackages
         }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: pythonPath)
-        process.arguments = [scriptPath, audioURL.path, outDir.path]
+        process.arguments = [
+            scriptPath,
+            audioURL.path,
+            outDir.path,
+            "--device", performanceProfile.device,
+            "--threads", "\(performanceProfile.threads)",
+            "--batch-size-s", "\(performanceProfile.batchSizeSeconds)",
+            "--merge-length-s", "\(performanceProfile.mergeLengthSeconds)",
+            "--speaker-diarization", performanceProfile.speakerDiarizationEnabled ? "1" : "0"
+        ]
         process.environment = env
 
         let outputPipe = Pipe()

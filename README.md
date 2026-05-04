@@ -108,13 +108,15 @@ ditto -c -k --sequesterRsrc --keepParent dist/AudioTranscriber.app dist/AudioTra
 ## 使用说明
 
 1. 启动 App。
-2. 等待环境检测完成。
+2. 点击“预热环境”，异步检测依赖和当前设备性能配置。
 3. 如 Python 检测不正确，点击 Python 行的选择按钮，手动选择安装了 FunASR 的 `python3`。
 4. 如缺少依赖，使用环境卡片中的安装按钮打开 Terminal 安装。
 5. 拖入音频文件或点击选择文件。
 6. 可选择输出目录；不选择时默认保存到音频同目录。
 7. 点击“开始转写”。
 8. 完成后在输出目录查看 JSON 与 Markdown 转写结果。
+
+预热完成后，App 会根据 CPU 核心数、内存和 Python 能力自动推荐安全的转写性能配置，并将线程数、批处理时长等参数传给转写脚本。当前默认使用 CPU 稳定模式；如果检测到 Apple Silicon MPS，会先作为提示展示，不默认强制启用。
 
 ## 隐私与仓库内容
 
@@ -134,4 +136,6 @@ ditto -c -k --sequesterRsrc --keepParent dist/AudioTranscriber.app dist/AudioTra
 - 本地转写主链路已接入 FunASR。
 - Python 环境自动检测和手动选择已增强。
 - 缺依赖时支持从界面触发安装/下载入口。
+- 启动时不再同步检测重依赖，改为手动预热环境。
+- 预热后会根据当前设备生成自动性能配置。
 - 摘要功能已有基础脚本和 UI 入口，但 API 配置体验仍可继续完善。

@@ -67,13 +67,13 @@ struct ContentView: View {
                         onAutoDetectPython: {
                             settingsManager.pythonPath = ""
                             envChecker.customPythonPath = ""
-                            envChecker.check()
-                            settingsManager.pythonPath = envChecker.pythonPath
+                            envChecker.initialize(cachedPythonPath: "")
+                            envChecker.warmUp()
                         },
                         onClearPython: {
                             settingsManager.pythonPath = ""
                             envChecker.customPythonPath = ""
-                            envChecker.check()
+                            envChecker.initialize(cachedPythonPath: "")
                         }
                     )
 
@@ -83,22 +83,27 @@ struct ContentView: View {
                             if transcriber.isTranscribing {
                                 transcriber.stopTranscription()
                             } else {
+                                guard envChecker.hasChecked else {
+                                    envChecker.warmUp()
+                                    return
+                                }
                                 transcriber.startTranscription(
                                     audioURL: selectedFileURL,
                                     outputDir: effectiveOutputDir,
                                     pythonPath: envChecker.pythonPath,
-                                    pythonSitePackages: envChecker.pythonSitePackages
+                                    pythonSitePackages: envChecker.pythonSitePackages,
+                                    performanceProfile: envChecker.performanceProfile
                                 )
                             }
                         }) {
                             HStack {
                                 Image(systemName: transcriber.isTranscribing ? "stop.fill" : "play.fill")
-                                Text(transcriber.isTranscribing ? "停止转写" : "开始转写")
+                                Text(transcriber.isTranscribing ? "停止转写" : (envChecker.hasChecked ? "开始转写" : "先预热环境"))
                             }
                             .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(PrimaryButtonStyle())
-                        .disabled(selectedFileURL == nil || !envChecker.allReady)
+                        .disabled(selectedFileURL == nil || envChecker.isChecking || (envChecker.hasChecked && !envChecker.allReady))
 
                         Button(action: {
                             transcriber.startSummarization(
@@ -115,7 +120,7 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(SecondaryButtonStyle())
-                        .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil)
+                        .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || !envChecker.hasChecked)
                     }
                     .padding(.horizontal, 24)
 
@@ -166,10 +171,10 @@ struct ContentView: View {
         .background(Color(hex: "1E1E2E"))
         .onAppear {
             envChecker.customPythonPath = settingsManager.pythonPath
-            envChecker.check()
             if settingsManager.pythonPath.isEmpty {
                 settingsManager.pythonPath = envChecker.pythonPath
             }
+            envChecker.initialize(cachedPythonPath: settingsManager.pythonPath)
         }
         .fileImporter(
             isPresented: $showingFilePicker,
@@ -190,11 +195,16 @@ struct ContentView: View {
         .onChange(of: settingsManager.pythonPath) { newPath in
             envChecker.customPythonPath = newPath
         }
+        .onChange(of: envChecker.pythonPath) { newPath in
+            if envChecker.hasChecked, !newPath.isEmpty, settingsManager.pythonPath != newPath {
+                settingsManager.pythonPath = newPath
+            }
+        }
         .background(PythonExecutablePicker(isPresented: $showingPythonPicker) { url in
             if let url = url {
                 settingsManager.pythonPath = url.path
                 envChecker.customPythonPath = url.path
-                envChecker.check()
+                envChecker.initialize(cachedPythonPath: url.path)
             }
         })
     }
