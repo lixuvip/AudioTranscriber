@@ -102,7 +102,7 @@ ditto -c -k --sequesterRsrc --keepParent dist/AudioTranscriber.app dist/AudioTra
 也可以直接运行脚本：
 
 ```bash
-./scripts/package_macos_app.sh
+./Tools/package_macos_app.sh
 ```
 
 ## 使用说明
