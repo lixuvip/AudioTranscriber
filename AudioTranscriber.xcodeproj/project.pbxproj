@@ -10,6 +10,7 @@
 		1007C5190F8099EB8BA403A7 /* StatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 645849877D1A4B50E37D2949 /* StatusCard.swift */; };
 		142E4C27EB7DDAC1A2315F22 /* ButtonStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7150597ABE075A0AE58638DD /* ButtonStyles.swift */; };
 		189F6158C757625DC9242E9A /* LogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8723A43C75A6CCF4B5796B6 /* LogView.swift */; };
+		2E4D5B74C42F4D8192A0C1A9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9E1A8C63A1C9405DB8F54B2E /* Assets.xcassets */; };
 		354324917C9DDF1A392D93FB /* FolderPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D9A970E7A0B455D675E204D /* FolderPickerSheet.swift */; };
 		68D0656A4FCF5339868B457B /* SettingsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD41FE1F2D8AFEF79553C142 /* SettingsPanel.swift */; };
 		6FFCE22F01FA2CC07564F166 /* FolderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0F3944164CD468FD4D5D7ED /* FolderPicker.swift */; };
@@ -35,18 +36,23 @@
 		7150597ABE075A0AE58638DD /* ButtonStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ButtonStyles.swift; sourceTree = "<group>"; };
 		7FB16C850D7F8408E3191237 /* EnvironmentChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentChecker.swift; sourceTree = "<group>"; };
 		8F416D95A3A32ADC754A56E5 /* transcribe.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = transcribe.py; sourceTree = "<group>"; };
+		9E1A8C63A1C9405DB8F54B2E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A53D28B26484452092B97E2F /* AppIcon.svg */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = AppIcon.svg; sourceTree = "<group>"; };
+		A7B79290884A493DA9709E04 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		B8723A43C75A6CCF4B5796B6 /* LogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogView.swift; sourceTree = "<group>"; };
 		BD41FE1F2D8AFEF79553C142 /* SettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPanel.swift; sourceTree = "<group>"; };
 		CEB9FB8C7AE8F3DA8C869A5B /* FileDropZone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropZone.swift; sourceTree = "<group>"; };
 		E0F3944164CD468FD4D5D7ED /* FolderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderPicker.swift; sourceTree = "<group>"; };
 		E7467C943DCE76EC6D2970DA /* summarize.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = summarize.py; sourceTree = "<group>"; };
 		F584F47F0507CA7BC23C8CF1 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F9D6D60452684D0CBE7B9293 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
 		2592F3D14D820BE0BF8F3F65 = {
 			isa = PBXGroup;
 			children = (
+				56D777F7D43D4D7090C38E2A /* Resources */,
 				EE144AFE26C0C893D701C006 /* Scripts */,
 				2DC57A28AB891491701B618C /* Sources */,
 				3D0E5C49C657D165EC007BDE /* Products */,
@@ -67,6 +73,17 @@
 				0E92666516BAE7417A4AA8F8 /* AudioTranscriber.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		56D777F7D43D4D7090C38E2A /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				9E1A8C63A1C9405DB8F54B2E /* Assets.xcassets */,
+				A7B79290884A493DA9709E04 /* AppIcon.icns */,
+				A53D28B26484452092B97E2F /* AppIcon.svg */,
+				F9D6D60452684D0CBE7B9293 /* Info.plist */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		6D0F3F652D20CD7EE3116C61 /* App */ = {
@@ -166,6 +183,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2E4D5B74C42F4D8192A0C1A9 /* Assets.xcassets in Resources */,
 				B75EE96B85BB2177CE60734A /* summarize.py in Resources */,
 				F22F7CFAA8535DE680E25161 /* transcribe.py in Resources */,
 			);

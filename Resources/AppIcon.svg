@@ -1,0 +1,52 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2B254E"/>
+      <stop offset="0.52" stop-color="#1E1E2E"/>
+      <stop offset="1" stop-color="#14141F"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="220" y1="176" x2="804" y2="848" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8D7CFF"/>
+      <stop offset="0.5" stop-color="#7C6FE3"/>
+      <stop offset="1" stop-color="#4EC9B0"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="272" y1="326" x2="752" y2="326" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4EC9B0"/>
+      <stop offset="1" stop-color="#8D7CFF"/>
+    </linearGradient>
+    <filter id="shadow" x="64" y="64" width="896" height="896" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="32" stdDeviation="34" flood-color="#000000" flood-opacity="0.36"/>
+    </filter>
+    <filter id="soft" x="144" y="144" width="736" height="736" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="42"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="220" fill="#11111A"/>
+  <g filter="url(#shadow)">
+    <rect x="112" y="96" width="800" height="832" rx="188" fill="url(#bg)"/>
+    <rect x="132" y="116" width="760" height="792" rx="168" stroke="url(#ring)" stroke-width="20" opacity="0.92"/>
+  </g>
+
+  <g filter="url(#soft)" opacity="0.42">
+    <circle cx="336" cy="250" r="150" fill="#7C6FE3"/>
+    <circle cx="726" cy="754" r="180" fill="#4EC9B0"/>
+  </g>
+
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M308 330V470" stroke="url(#wave)" stroke-width="38"/>
+    <path d="M376 274V526" stroke="url(#wave)" stroke-width="38"/>
+    <path d="M444 214V586" stroke="url(#wave)" stroke-width="38"/>
+    <path d="M512 178V622" stroke="url(#wave)" stroke-width="38"/>
+    <path d="M580 238V562" stroke="url(#wave)" stroke-width="38"/>
+    <path d="M648 296V504" stroke="url(#wave)" stroke-width="38"/>
+    <path d="M716 356V444" stroke="url(#wave)" stroke-width="38"/>
+  </g>
+
+  <path d="M286 706H738" stroke="#F7F7FF" stroke-width="34" stroke-linecap="round" opacity="0.95"/>
+  <path d="M286 778H660" stroke="#A0A0B0" stroke-width="30" stroke-linecap="round" opacity="0.95"/>
+  <path d="M286 846H540" stroke="#4EC9B0" stroke-width="30" stroke-linecap="round" opacity="0.95"/>
+
+  <circle cx="760" cy="804" r="76" fill="#7C6FE3"/>
+  <path d="M726 804H794M760 770V838" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round"/>
+</svg>

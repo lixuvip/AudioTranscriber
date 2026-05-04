@@ -31,6 +31,7 @@ targets:
       - path: Resources
         excludes:
           - "**/.DS_Store"
+          - "AppIcon.svg"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.audiotools.transcriber
