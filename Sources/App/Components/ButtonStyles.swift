@@ -33,3 +33,20 @@ struct SecondaryButtonStyle: ButtonStyle {
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
 }
+
+struct DangerButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundColor(Color(hex: "FF6B6B"))
+            .padding(.vertical, 12)
+            .padding(.horizontal, 18)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(hex: "FF6B6B"), lineWidth: 1.5)
+                    .opacity(configuration.isPressed ? 0.7 : 1.0)
+            )
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+}

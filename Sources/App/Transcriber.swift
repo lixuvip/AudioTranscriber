@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Darwin
 
 @MainActor
 class Transcriber: ObservableObject {
@@ -10,6 +11,7 @@ class Transcriber: ObservableObject {
     @Published var currentProgress: String = ""
 
     private var currentTask: Process?
+    private var didRequestStop = false
 
     var bundleScriptsDir: URL {
         if Bundle.main.resourceURL != nil {
@@ -22,6 +24,7 @@ class Transcriber: ObservableObject {
         guard let audioURL = audioURL else { return }
         let outDir = outputDir ?? audioURL.deletingLastPathComponent()
 
+        didRequestStop = false
         isTranscribing = true
         isSummarizing = false
         logs = []
@@ -66,7 +69,7 @@ class Transcriber: ObservableObject {
         }
 
         do {
-            try process.launch()
+            try process.run()
         } catch {
             appendLog("启动失败: \(error.localizedDescription)")
             isTranscribing = false
@@ -74,10 +77,55 @@ class Transcriber: ObservableObject {
     }
 
     func stopTranscription() {
-        currentTask?.terminate()
-        currentTask = nil
+        guard let task = currentTask, task.isRunning else {
+            isTranscribing = false
+            currentTask = nil
+            return
+        }
+
+        didRequestStop = true
+        currentProgress = "正在停止..."
+        appendLog("正在停止转写进程...")
+        task.terminate()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak task] in
+            guard let self, let task, self.didRequestStop, task.isRunning else { return }
+            kill(task.processIdentifier, SIGKILL)
+            self.appendLog("转写进程未及时退出，已强制结束。")
+        }
+    }
+
+    func stopCurrentTask() {
+        if isTranscribing {
+            stopTranscription()
+            return
+        }
+
+        guard let task = currentTask, task.isRunning else {
+            isSummarizing = false
+            currentTask = nil
+            return
+        }
+
+        didRequestStop = true
+        currentProgress = "正在停止..."
+        appendLog("正在停止当前进程...")
+        task.terminate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak task] in
+            guard let self, let task, self.didRequestStop, task.isRunning else { return }
+            kill(task.processIdentifier, SIGKILL)
+            self.appendLog("当前进程未及时退出，已强制结束。")
+        }
+    }
+
+    private func markStoppedByUser() {
+        progress = 0
+        currentProgress = "已停止"
         isTranscribing = false
-        appendLog("已停止转写")
+        isSummarizing = false
+        currentTask = nil
+        didRequestStop = false
+        appendLog("已停止")
     }
 
     func startSummarization(audioURL: URL?, outputDir: URL?, model: String, pythonPath: String) {
@@ -86,6 +134,7 @@ class Transcriber: ObservableObject {
         let baseName = audioURL.deletingPathExtension().lastPathComponent
         let mdPath = outDir.appendingPathComponent("\(baseName)_通话记录.md")
 
+        didRequestStop = false
         isSummarizing = true
         isTranscribing = false
         logs = []
@@ -120,7 +169,7 @@ class Transcriber: ObservableObject {
         }
 
         do {
-            try process.launch()
+            try process.run()
         } catch {
             appendLog("启动失败: \(error.localizedDescription)")
             isSummarizing = false
@@ -142,6 +191,11 @@ class Transcriber: ObservableObject {
     }
 
     private func handleTermination(status: Int32) {
+        if didRequestStop {
+            markStoppedByUser()
+            return
+        }
+
         if status == 0 {
             progress = 1.0
             currentProgress = "完成 ✓"

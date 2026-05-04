@@ -80,30 +80,26 @@ struct ContentView: View {
                     // 按钮行
                     HStack(spacing: 12) {
                         Button(action: {
-                            if transcriber.isTranscribing {
-                                transcriber.stopTranscription()
-                            } else {
-                                guard envChecker.hasChecked else {
-                                    envChecker.warmUp()
-                                    return
-                                }
-                                transcriber.startTranscription(
-                                    audioURL: selectedFileURL,
-                                    outputDir: effectiveOutputDir,
-                                    pythonPath: envChecker.pythonPath,
-                                    pythonSitePackages: envChecker.pythonSitePackages,
-                                    performanceProfile: envChecker.performanceProfile
-                                )
+                            guard envChecker.hasChecked else {
+                                envChecker.warmUp()
+                                return
                             }
+                            transcriber.startTranscription(
+                                audioURL: selectedFileURL,
+                                outputDir: effectiveOutputDir,
+                                pythonPath: envChecker.pythonPath,
+                                pythonSitePackages: envChecker.pythonSitePackages,
+                                performanceProfile: envChecker.performanceProfile
+                            )
                         }) {
                             HStack {
-                                Image(systemName: transcriber.isTranscribing ? "stop.fill" : "play.fill")
-                                Text(transcriber.isTranscribing ? "停止转写" : (envChecker.hasChecked ? "开始转写" : "先预热环境"))
+                                Image(systemName: "play.fill")
+                                Text(envChecker.hasChecked ? "开始转写" : "先预热环境")
                             }
                             .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(PrimaryButtonStyle())
-                        .disabled(selectedFileURL == nil || envChecker.isChecking || (envChecker.hasChecked && !envChecker.allReady))
+                        .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || envChecker.isChecking || (envChecker.hasChecked && !envChecker.allReady))
 
                         Button(action: {
                             transcriber.startSummarization(
@@ -121,6 +117,18 @@ struct ContentView: View {
                         }
                         .buttonStyle(SecondaryButtonStyle())
                         .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || !envChecker.hasChecked)
+
+                        Button(action: {
+                            transcriber.stopCurrentTask()
+                        }) {
+                            HStack {
+                                Image(systemName: "stop.fill")
+                                Text("停止转写")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(DangerButtonStyle())
+                        .disabled(!transcriber.isTranscribing)
                     }
                     .padding(.horizontal, 24)
 
