@@ -12,9 +12,81 @@ struct SettingsPanel: View {
     @State private var newModelName = ""
     @State private var newModelId = ""
     @State private var newModelApiBase = ""
+    @State private var newModelApiKey = ""
+    @State private var newModelProviderType = LLMProviderType.openAICompatible
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "desktopcomputer")
+                    .foregroundColor(Color(hex: "7C6FE3"))
+                    .frame(width: 16)
+                Text("环境")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                    .frame(width: 60, alignment: .leading)
+
+                Picker("", selection: Binding(
+                    get: { settingsManager.runtimeEnvironment },
+                    set: { settingsManager.updateRuntimeEnvironment($0) }
+                )) {
+                    ForEach(RuntimeEnvironment.allCases) { environment in
+                        Text(environment.title).tag(environment)
+                    }
+                }
+                .pickerStyle(.menu)
+                .background(Color(hex: "1E1E2E"))
+                .cornerRadius(6)
+
+                Text(settingsManager.runtimeEnvironment.description)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: "cpu")
+                    .foregroundColor(Color(hex: "7C6FE3"))
+                    .frame(width: 16)
+                Text("引擎")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                    .frame(width: 60, alignment: .leading)
+
+                Picker("", selection: Binding(
+                    get: { settingsManager.transcriptionEngine },
+                    set: { settingsManager.updateTranscriptionEngine($0) }
+                )) {
+                    ForEach(settingsManager.availableTranscriptionEngines()) { engine in
+                        Text(engine.title).tag(engine)
+                    }
+                }
+                .pickerStyle(.menu)
+                .background(Color(hex: "1E1E2E"))
+                .cornerRadius(6)
+
+                Text(settingsManager.transcriptionEngine.description)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: "cube.box")
+                    .foregroundColor(Color(hex: "7C6FE3"))
+                    .frame(width: 16)
+                Text("模型")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                    .frame(width: 60, alignment: .leading)
+
+                TextField("模型 ID 或别名", text: $settingsManager.transcriptionModelID)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.white)
+                    .padding(8)
+                    .background(Color(hex: "1E1E2E"))
+                    .cornerRadius(6)
+            }
+
             // Python 路径
             HStack(spacing: 10) {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
@@ -64,6 +136,16 @@ struct SettingsPanel: View {
                 .buttonStyle(.plain)
             }
 
+            if settingsManager.transcriptionEngine == .vibeVoiceMLX {
+                HStack(spacing: 10) {
+                    Spacer()
+                        .frame(width: 86)
+                    Text("MLX 引擎同样通过 Python 启动，但检测与安装将按 VibeVoice MLX 路线进行。")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                }
+            }
+
             // 输出目录
             HStack(spacing: 10) {
                 Image(systemName: "folder.fill")
@@ -103,19 +185,24 @@ struct SettingsPanel: View {
                     .foregroundColor(Color(hex: "A0A0B0"))
                     .frame(width: 60, alignment: .leading)
 
-                Picker("", selection: $settingsManager.selectedModel) {
-                    Text("qwen-plus").tag("qwen-plus")
-                    Text("qwen-turbo").tag("qwen-turbo")
-                    Text("qwen-max").tag("qwen-max")
-                    Text("claude-3-haiku").tag("claude-3-haiku-20240307")
-                    Text("gpt-4o-mini").tag("gpt-4o-mini")
-                    ForEach(settingsManager.customModels) { m in
-                        Text("\(m.name) (\(m.id))").tag(m.id)
+                if settingsManager.customModels.isEmpty {
+                    Text("请先添加线上模型")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color(hex: "1E1E2E"))
+                        .cornerRadius(6)
+                } else {
+                    Picker("", selection: $settingsManager.selectedModel) {
+                        ForEach(settingsManager.customModels) { m in
+                            Text("\(m.name) (\(m.id))").tag(m.id)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .background(Color(hex: "1E1E2E"))
+                    .cornerRadius(6)
                 }
-                .pickerStyle(.menu)
-                .background(Color(hex: "1E1E2E"))
-                .cornerRadius(6)
 
                 Button(action: { showingAddModel = true }) {
                     Image(systemName: "plus.circle")
@@ -123,6 +210,69 @@ struct SettingsPanel: View {
                         .foregroundColor(Color(hex: "7C6FE3"))
                 }
                 .buttonStyle(.plain)
+            }
+
+            if !settingsManager.customModels.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "text.bubble")
+                            .foregroundColor(Color(hex: "7C6FE3"))
+                            .frame(width: 16)
+                        Text("摘要提示")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color(hex: "A0A0B0"))
+                            .frame(width: 60, alignment: .leading)
+
+                        TextField("可选：补充摘要要求，例如重点关注待办、风险、决策", text: $settingsManager.summaryPrompt, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(Color(hex: "1E1E2E"))
+                            .cornerRadius(6)
+                    }
+
+                    HStack(spacing: 10) {
+                        Spacer()
+                            .frame(width: 86)
+                        Text("示例：请重点整理决策事项和待办；请按角色分别总结观点；请保留争议点和风险点")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(hex: "A0A0B0"))
+                    }
+
+                    Text("已添加模型")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+
+                    ForEach(settingsManager.customModels) { model in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.name)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white)
+                                Text("\(model.providerType.title) · \(model.apiBase)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(Color(hex: "A0A0B0"))
+                                    .lineLimit(1)
+                                Text(model.id)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(Color(hex: "7C6FE3"))
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Button(action: {
+                                settingsManager.deleteModel(id: model.id)
+                            }) {
+                                Image(systemName: "trash")
+                                    .foregroundColor(Color(hex: "F08A8A"))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(10)
+                        .background(Color(hex: "1E1E2E"))
+                        .cornerRadius(8)
+                    }
+                }
             }
         }
         .padding(14)
@@ -134,14 +284,21 @@ struct SettingsPanel: View {
                 name: $newModelName,
                 id: $newModelId,
                 apiBase: $newModelApiBase,
+                apiKey: $newModelApiKey,
+                providerType: $newModelProviderType,
                 onSave: {
-                    let m = LLMModel(id: newModelId, name: newModelName, apiBase: newModelApiBase)
-                    if !settingsManager.customModels.contains(where: { $0.id == newModelId }) {
-                        settingsManager.customModels.append(m)
-                    }
+                    settingsManager.addModel(
+                        id: newModelId,
+                        name: newModelName,
+                        apiBase: newModelApiBase,
+                        apiKey: newModelApiKey,
+                        providerType: newModelProviderType
+                    )
                     newModelName = ""
                     newModelId = ""
                     newModelApiBase = ""
+                    newModelApiKey = ""
+                    newModelProviderType = .openAICompatible
                     showingAddModel = false
                 }
             )
@@ -153,6 +310,8 @@ struct AddModelSheet: View {
     @Binding var name: String
     @Binding var id: String
     @Binding var apiBase: String
+    @Binding var apiKey: String
+    @Binding var providerType: LLMProviderType
     var onSave: () -> Void
     @Environment(\.dismiss) var dismiss
 
@@ -166,7 +325,7 @@ struct AddModelSheet: View {
                 Text("模型名称")
                     .font(.system(size: 11))
                     .foregroundColor(Color(hex: "A0A0B0"))
-                TextField("例如：我的模型", text: $name)
+                TextField("", text: $name)
                     .textFieldStyle(.roundedBorder)
             }
 
@@ -174,15 +333,35 @@ struct AddModelSheet: View {
                 Text("Model ID")
                     .font(.system(size: 11))
                     .foregroundColor(Color(hex: "A0A0B0"))
-                TextField("例如：gpt-4o", text: $id)
+                TextField("", text: $id)
                     .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("接口形态")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                Picker("", selection: $providerType) {
+                    ForEach(LLMProviderType.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.menu)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("API Base URL")
                     .font(.system(size: 11))
                     .foregroundColor(Color(hex: "A0A0B0"))
-                TextField("例如：https://api.openai.com/v1", text: $apiBase)
+                TextField("", text: $apiBase)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("API Token / Key")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                SecureField("", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
             }
 
@@ -191,7 +370,7 @@ struct AddModelSheet: View {
                     .buttonStyle(.bordered)
                 Button("添加") { onSave() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(name.isEmpty || id.isEmpty)
+                    .disabled(name.isEmpty || id.isEmpty || apiBase.isEmpty || apiKey.isEmpty)
             }
         }
         .padding(24)

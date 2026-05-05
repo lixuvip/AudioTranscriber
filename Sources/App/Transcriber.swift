@@ -9,9 +9,16 @@ class Transcriber: ObservableObject {
     @Published var logs: [String] = []
     @Published var progress: Double = 0
     @Published var currentProgress: String = ""
+    @Published var speakerRoles: [SpeakerRole] = []
+    @Published var speakerRolesReady = false
+    @Published var currentTranscriptURL: URL?
+    @Published var currentSpeakerMapURL: URL?
+    @Published var currentSpeakerTextURL: URL?
 
     private var currentTask: Process?
     private var didRequestStop = false
+    private var currentTranscriptSegments: [TranscriptSegment] = []
+    private var currentTranscriptTitle: String = ""
 
     var bundleScriptsDir: URL {
         if Bundle.main.resourceURL != nil {
@@ -20,11 +27,18 @@ class Transcriber: ObservableObject {
         return URL(fileURLWithPath: "../../../Scripts") // fallback only for dev, not used in built app
     }
 
-    func startTranscription(audioURL: URL?, outputDir: URL?, pythonPath: String, pythonSitePackages: String = "", performanceProfile: PerformanceProfile = .automatic) {
+    func startTranscription(audioURL: URL?, outputDir: URL?, pythonPath: String, pythonSitePackages: String = "", performanceProfile: PerformanceProfile = .automatic, engine: TranscriptionEngine = .funASR, modelID: String = "") {
         guard let audioURL = audioURL else { return }
         let outDir = outputDir ?? audioURL.deletingLastPathComponent()
 
         didRequestStop = false
+        speakerRoles = []
+        speakerRolesReady = false
+        currentTranscriptURL = nil
+        currentSpeakerMapURL = nil
+        currentSpeakerTextURL = nil
+        currentTranscriptSegments = []
+        currentTranscriptTitle = audioURL.deletingPathExtension().lastPathComponent
         isTranscribing = true
         isSummarizing = false
         logs = []
@@ -45,6 +59,8 @@ class Transcriber: ObservableObject {
             scriptPath,
             audioURL.path,
             outDir.path,
+            "--engine", engine.rawValue,
+            "--model-id", modelID.isEmpty ? engine.defaultModelID : modelID,
             "--device", performanceProfile.device,
             "--threads", "\(performanceProfile.threads)",
             "--batch-size-s", "\(performanceProfile.batchSizeSeconds)",
@@ -52,6 +68,10 @@ class Transcriber: ObservableObject {
             "--speaker-diarization", performanceProfile.speakerDiarizationEnabled ? "1" : "0"
         ]
         process.environment = env
+
+        currentTranscriptURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_通话记录.md")
+        currentSpeakerMapURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_speaker_map.json")
+        currentSpeakerTextURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_整理版.md")
 
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
@@ -128,11 +148,13 @@ class Transcriber: ObservableObject {
         appendLog("已停止")
     }
 
-    func startSummarization(audioURL: URL?, outputDir: URL?, model: String, pythonPath: String) {
+    func startSummarization(audioURL: URL?, outputDir: URL?, model: LLMModel, pythonPath: String, summaryPrompt: String = "") {
         guard let audioURL = audioURL else { return }
         let outDir = outputDir ?? audioURL.deletingLastPathComponent()
         let baseName = audioURL.deletingPathExtension().lastPathComponent
-        let mdPath = outDir.appendingPathComponent("\(baseName)_通话记录.md")
+        let speakerTextPath = outDir.appendingPathComponent("\(baseName)_整理版.md")
+        let fallbackPath = outDir.appendingPathComponent("\(baseName)_通话记录.md")
+        let inputPath = FileManager.default.fileExists(atPath: speakerTextPath.path) ? speakerTextPath : fallbackPath
 
         didRequestStop = false
         isSummarizing = true
@@ -143,15 +165,20 @@ class Transcriber: ObservableObject {
 
         let scriptPath = bundleScriptsDir.appendingPathComponent("summarize.py").path
 
-        let cmd = """
-        export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
-        export OPENAI_API_BASE="${OPENAI_API_BASE:-https://api.openai.com/v1}"
-        \(pythonPath) \(scriptPath) "\(mdPath.path)" "\(model)" 2>&1
-        """
-
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", cmd]
+        process.executableURL = URL(fileURLWithPath: pythonPath)
+        process.arguments = [
+            scriptPath,
+            inputPath.path,
+            model.id,
+            "--api-base", model.apiBase,
+            "--api-key", model.apiKey,
+            "--provider-type", model.providerType.rawValue,
+        ]
+        if !summaryPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            process.arguments?.append(contentsOf: ["--summary-prompt", summaryPrompt])
+            appendLog("已应用摘要提示词")
+        }
         currentTask = process
 
         let outputPipe = Pipe()
@@ -200,6 +227,7 @@ class Transcriber: ObservableObject {
             progress = 1.0
             currentProgress = "完成 ✓"
             appendLog("✓ 完成")
+            loadSpeakerRolesIfNeeded()
         } else if isTranscribing {
             appendLog("✗ 转写失败 (exit: \(status))")
             progress = 0
@@ -216,4 +244,73 @@ class Transcriber: ObservableObject {
         if logs.count > 500 { logs.removeFirst() }
         logs.append(line)
     }
+
+    private func loadSpeakerRolesIfNeeded() {
+        guard let mapURL = currentSpeakerMapURL,
+              let data = try? Data(contentsOf: mapURL),
+              let payload = try? JSONDecoder().decode(SpeakerMapPayload.self, from: data) else {
+            speakerRolesReady = false
+            return
+        }
+        currentTranscriptSegments = payload.segments
+        currentTranscriptTitle = payload.title
+        speakerRoles = payload.roles.map {
+            SpeakerRole(key: $0.key, placeholder: $0.placeholder, displayName: $0.displayName)
+        }
+        speakerRolesReady = !speakerRoles.isEmpty
+        rebuildSpeakerText()
+    }
+
+    func updateSpeakerRole(id: String, displayName: String) {
+        guard let index = speakerRoles.firstIndex(where: { $0.id == id }) else { return }
+        speakerRoles[index].displayName = displayName
+        rebuildSpeakerText()
+    }
+
+    func applySpeakerNames() {
+        rebuildSpeakerText()
+        appendLog("已更新角色名称并重写正文")
+    }
+
+    private func rebuildSpeakerText() {
+        guard let speakerTextURL = currentSpeakerTextURL else { return }
+        let nameMap = Dictionary(uniqueKeysWithValues: speakerRoles.map {
+            ($0.placeholder, $0.displayName.isEmpty ? $0.placeholder : $0.displayName)
+        })
+
+        var lines: [String] = ["# \(currentTranscriptTitle) 整理版\n"]
+        for segment in currentTranscriptSegments {
+            let start = timestamp(from: segment.start)
+            let speakerName = nameMap[segment.placeholder] ?? segment.placeholder
+            lines.append("[\(start)] 【\(speakerName)】 \(segment.text)")
+        }
+
+        try? lines.joined(separator: "\n").write(to: speakerTextURL, atomically: true, encoding: .utf8)
+    }
+
+    private func timestamp(from seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+}
+
+struct SpeakerRole: Identifiable, Codable {
+    var id: String { key }
+    let key: String
+    let placeholder: String
+    var displayName: String
+}
+
+struct TranscriptSegment: Codable {
+    let speakerKey: String
+    let placeholder: String
+    let start: Double
+    let end: Double
+    let text: String
+}
+
+struct SpeakerMapPayload: Codable {
+    let title: String
+    let roles: [SpeakerRole]
+    let segments: [TranscriptSegment]
 }

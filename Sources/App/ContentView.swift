@@ -34,6 +34,11 @@ struct ContentView: View {
                     .foregroundColor(.white)
                 Spacer()
                 Button(action: {
+                    envChecker.updateRuntimeSelection(
+                        environment: settingsManager.runtimeEnvironment,
+                        engine: settingsManager.transcriptionEngine,
+                        modelID: settingsManager.transcriptionModelID
+                    )
                     envChecker.customPythonPath = settingsManager.pythonPath
                     envChecker.check()
                 }) {
@@ -67,12 +72,22 @@ struct ContentView: View {
                         onAutoDetectPython: {
                             settingsManager.pythonPath = ""
                             envChecker.customPythonPath = ""
+                            envChecker.updateRuntimeSelection(
+                                environment: settingsManager.runtimeEnvironment,
+                                engine: settingsManager.transcriptionEngine,
+                                modelID: settingsManager.transcriptionModelID
+                            )
                             envChecker.initialize(cachedPythonPath: "")
                             envChecker.warmUp()
                         },
                         onClearPython: {
                             settingsManager.pythonPath = ""
                             envChecker.customPythonPath = ""
+                            envChecker.updateRuntimeSelection(
+                                environment: settingsManager.runtimeEnvironment,
+                                engine: settingsManager.transcriptionEngine,
+                                modelID: settingsManager.transcriptionModelID
+                            )
                             envChecker.initialize(cachedPythonPath: "")
                         }
                     )
@@ -89,24 +104,28 @@ struct ContentView: View {
                                 outputDir: effectiveOutputDir,
                                 pythonPath: envChecker.pythonPath,
                                 pythonSitePackages: envChecker.pythonSitePackages,
-                                performanceProfile: envChecker.performanceProfile
+                                performanceProfile: envChecker.performanceProfile,
+                                engine: settingsManager.transcriptionEngine,
+                                modelID: settingsManager.transcriptionModelID
                             )
                         }) {
                             HStack {
                                 Image(systemName: "play.fill")
-                                Text(envChecker.hasChecked ? "开始转写" : "先预热环境")
-                            }
-                            .frame(maxWidth: .infinity)
+                            Text(envChecker.hasChecked ? "开始转写" : "先预热环境")
                         }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || envChecker.isChecking || (envChecker.hasChecked && !envChecker.allReady))
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || envChecker.isChecking || (envChecker.hasChecked && !envChecker.allReady))
 
                         Button(action: {
+                            guard let model = settingsManager.customModels.first(where: { $0.id == settingsManager.selectedModel }) else { return }
                             transcriber.startSummarization(
                                 audioURL: selectedFileURL,
                                 outputDir: effectiveOutputDir,
-                                model: settingsManager.selectedModel,
-                                pythonPath: envChecker.pythonPath
+                                model: model,
+                                pythonPath: envChecker.pythonPath,
+                                summaryPrompt: settingsManager.summaryPrompt
                             )
                         }) {
                             HStack {
@@ -116,7 +135,7 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(SecondaryButtonStyle())
-                        .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || !envChecker.hasChecked)
+                        .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || !envChecker.hasChecked || settingsManager.selectedModel.isEmpty)
 
                         Button(action: {
                             transcriber.stopCurrentTask()
@@ -150,6 +169,18 @@ struct ContentView: View {
                         .padding(.horizontal, 24)
                     }
 
+                    if transcriber.speakerRolesReady {
+                        SpeakerRolesCard(
+                            roles: transcriber.speakerRoles,
+                            onChange: { roleID, newName in
+                                transcriber.updateSpeakerRole(id: roleID, displayName: newName)
+                            },
+                            onApply: {
+                                transcriber.applySpeakerNames()
+                            }
+                        )
+                    }
+
                     // 日志
                     LogView(logs: transcriber.logs)
                         .frame(minHeight: 150)
@@ -179,9 +210,11 @@ struct ContentView: View {
         .background(Color(hex: "1E1E2E"))
         .onAppear {
             envChecker.customPythonPath = settingsManager.pythonPath
-            if settingsManager.pythonPath.isEmpty {
-                settingsManager.pythonPath = envChecker.pythonPath
-            }
+            envChecker.updateRuntimeSelection(
+                environment: settingsManager.runtimeEnvironment,
+                engine: settingsManager.transcriptionEngine,
+                modelID: settingsManager.transcriptionModelID
+            )
             envChecker.initialize(cachedPythonPath: settingsManager.pythonPath)
         }
         .fileImporter(
@@ -203,6 +236,29 @@ struct ContentView: View {
         .onChange(of: settingsManager.pythonPath) { newPath in
             envChecker.customPythonPath = newPath
         }
+        .onChange(of: settingsManager.runtimeEnvironment) { _ in
+            envChecker.updateRuntimeSelection(
+                environment: settingsManager.runtimeEnvironment,
+                engine: settingsManager.transcriptionEngine,
+                modelID: settingsManager.transcriptionModelID
+            )
+            envChecker.initialize(cachedPythonPath: settingsManager.pythonPath)
+        }
+        .onChange(of: settingsManager.transcriptionEngine) { _ in
+            envChecker.updateRuntimeSelection(
+                environment: settingsManager.runtimeEnvironment,
+                engine: settingsManager.transcriptionEngine,
+                modelID: settingsManager.transcriptionModelID
+            )
+            envChecker.initialize(cachedPythonPath: settingsManager.pythonPath)
+        }
+        .onChange(of: settingsManager.transcriptionModelID) { _ in
+            envChecker.updateRuntimeSelection(
+                environment: settingsManager.runtimeEnvironment,
+                engine: settingsManager.transcriptionEngine,
+                modelID: settingsManager.transcriptionModelID
+            )
+        }
         .onChange(of: envChecker.pythonPath) { newPath in
             if envChecker.hasChecked, !newPath.isEmpty, settingsManager.pythonPath != newPath {
                 settingsManager.pythonPath = newPath
@@ -212,6 +268,11 @@ struct ContentView: View {
             if let url = url {
                 settingsManager.pythonPath = url.path
                 envChecker.customPythonPath = url.path
+                envChecker.updateRuntimeSelection(
+                    environment: settingsManager.runtimeEnvironment,
+                    engine: settingsManager.transcriptionEngine,
+                    modelID: settingsManager.transcriptionModelID
+                )
                 envChecker.initialize(cachedPythonPath: url.path)
             }
         })
@@ -244,5 +305,56 @@ private struct PythonExecutablePicker: NSViewRepresentable {
 
     final class Coordinator {
         var isShowing = false
+    }
+}
+
+private struct SpeakerRolesCard: View {
+    let roles: [SpeakerRole]
+    var onChange: (String, String) -> Void
+    var onApply: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "person.3.fill")
+                    .foregroundColor(Color(hex: "7C6FE3"))
+                Text("角色命名优化")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                Spacer()
+                Button("应用到整理版") {
+                    onApply()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            Text("转写后会先生成角色A、角色B、角色C。你可以在这里改成真实姓名或身份，整理版文本和后续摘要都会优先使用这些名称。")
+                .font(.system(size: 11))
+                .foregroundColor(Color(hex: "A0A0B0"))
+
+            ForEach(roles) { role in
+                HStack(spacing: 10) {
+                    Text(role.placeholder)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                        .frame(width: 70, alignment: .leading)
+
+                    TextField(role.placeholder, text: Binding(
+                        get: { role.displayName },
+                        set: { onChange(role.id, $0) }
+                    ))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+                    .padding(8)
+                    .background(Color(hex: "1E1E2E"))
+                    .cornerRadius(6)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(hex: "2A2A3C"))
+        .cornerRadius(12)
+        .padding(.horizontal, 24)
     }
 }

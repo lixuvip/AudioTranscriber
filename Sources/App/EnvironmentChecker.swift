@@ -11,6 +11,12 @@ struct DependencyStatus: Identifiable {
     var action: (() -> Void)?
 }
 
+struct RuntimeSelection {
+    var environment: RuntimeEnvironment
+    var engine: TranscriptionEngine
+    var modelID: String
+}
+
 struct PerformanceProfile {
     var device: String
     var threads: Int
@@ -31,6 +37,36 @@ struct PerformanceProfile {
     )
 }
 
+enum PerformanceTier: String, CaseIterable, Identifiable {
+    case low
+    case medium
+    case high
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .low:
+            return "低"
+        case .medium:
+            return "中"
+        case .high:
+            return "高"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .low:
+            return "更省资源，适合低配机器"
+        case .medium:
+            return "均衡速度和稳定性"
+        case .high:
+            return "更高吞吐，适合高配机器"
+        }
+    }
+}
+
 @MainActor
 class EnvironmentChecker: ObservableObject {
     @Published var deps: [DependencyStatus] = []
@@ -42,10 +78,18 @@ class EnvironmentChecker: ObservableObject {
     @Published var hasChecked = false
     @Published var checkProgress = "尚未预热环境"
     @Published var performanceProfile = PerformanceProfile.automatic
+    @Published var recommendedPerformanceTier: PerformanceTier = .medium
+    @Published var selectedPerformanceTier: PerformanceTier = .medium
+    @Published var recommendationDetail: String = "尚未预热"
     var customPythonPath: String = ""
+    var runtimeSelection = RuntimeSelection(
+        environment: .macAppleSilicon,
+        engine: .funASR,
+        modelID: TranscriptionEngine.funASR.defaultModelID
+    )
 
     var allReady: Bool {
-        let required = ["ffmpeg", "python3", "funasr"]
+        let required = Self.requiredDependencyNames(for: runtimeSelection.engine)
         return required.allSatisfy { name in
             deps.contains { $0.name == name && $0.isReady }
         }
@@ -59,10 +103,16 @@ class EnvironmentChecker: ObservableObject {
         let trimmed = cachedPythonPath.trimmingCharacters(in: .whitespacesAndNewlines)
         pythonPath = trimmed
         customPythonPath = trimmed
+        deps = []
+        performanceProfile = PerformanceProfile.automatic
+        recommendedPerformanceTier = .medium
+        selectedPerformanceTier = .medium
+        recommendationDetail = "尚未预热"
+        hasChecked = false
         if trimmed.isEmpty {
-            checkProgress = "点击“预热环境”后检测依赖和性能配置"
+            checkProgress = "请先选择运行环境和转写引擎，再点击“预热环境”进行检测"
         } else {
-            checkProgress = "已加载上次 Python，点击“预热环境”刷新检测"
+            checkProgress = "已加载当前 Python，选择引擎后点击“预热环境”开始检测"
             deps = [
                 DependencyStatus(
                     name: "python3",
@@ -74,21 +124,44 @@ class EnvironmentChecker: ObservableObject {
         }
     }
 
+    func updateRuntimeSelection(environment: RuntimeEnvironment, engine: TranscriptionEngine, modelID: String) {
+        runtimeSelection = RuntimeSelection(environment: environment, engine: engine, modelID: modelID)
+        deps = pythonPath.isEmpty ? [] : [
+            DependencyStatus(
+                name: "python3",
+                icon: "chevron.left.forwardslash.chevron.right",
+                isReady: true,
+                message: "当前配置\n\(pythonPath)"
+            )
+        ]
+        hasChecked = false
+        performanceProfile = PerformanceProfile.automatic
+        recommendedPerformanceTier = .medium
+        selectedPerformanceTier = .medium
+        recommendationDetail = "请先预热环境获取推荐依据"
+        checkProgress = "当前选择：\(engine.title)。点击“预热环境”检测依赖和模型。"
+        installMessage = ""
+    }
+
     func warmUp() {
         guard !isChecking else { return }
         isChecking = true
         hasChecked = false
-        checkProgress = "正在检测 Python 和依赖..."
+        checkProgress = "正在检测 \(runtimeSelection.engine.title) 依赖..."
         installMessage = ""
 
         let requestedPythonPath = customPythonPath
+        let runtimeSelection = runtimeSelection
         Task.detached(priority: .userInitiated) {
-            let result = Self.performEnvironmentCheck(customPythonPath: requestedPythonPath)
+            let result = Self.performEnvironmentCheck(customPythonPath: requestedPythonPath, runtimeSelection: runtimeSelection)
             await MainActor.run {
                 self.pythonPath = result.pythonPath
                 self.pythonSitePackages = result.pythonSitePackages
                 self.deps = result.deps
                 self.performanceProfile = result.performanceProfile
+                self.recommendedPerformanceTier = result.recommendedPerformanceTier
+                self.selectedPerformanceTier = result.recommendedPerformanceTier
+                self.recommendationDetail = result.recommendationDetail
                 self.checkProgress = result.progressMessage
                 self.isChecking = false
                 self.hasChecked = true
@@ -96,39 +169,59 @@ class EnvironmentChecker: ObservableObject {
         }
     }
 
+    func applyPerformanceTier(_ tier: PerformanceTier) {
+        selectedPerformanceTier = tier
+        let detected = Self.detectPerformanceProfile(pythonPath: pythonPath, engine: runtimeSelection.engine)
+        performanceProfile = Self.profile(for: tier, detected: detected, engine: runtimeSelection.engine)
+        checkProgress = "已切换到\(tier.title)档，可直接开始转写。"
+    }
+
     nonisolated private struct EnvironmentCheckResult {
         var pythonPath: String
         var pythonSitePackages: String
         var deps: [DependencyStatus]
         var performanceProfile: PerformanceProfile
+        var recommendedPerformanceTier: PerformanceTier
+        var recommendationDetail: String
         var progressMessage: String
     }
 
-    nonisolated private static func performEnvironmentCheck(customPythonPath: String) -> EnvironmentCheckResult {
-        let pythonDetection = detectPython(customPythonPath: customPythonPath)
+    nonisolated private static func performEnvironmentCheck(customPythonPath: String, runtimeSelection: RuntimeSelection) -> EnvironmentCheckResult {
+        let pythonDetection = detectPython(customPythonPath: customPythonPath, engine: runtimeSelection.engine)
         let pythonPath = pythonDetection.path
         var deps: [DependencyStatus] = []
 
         deps.append(checkFFmpegStatus())
         deps.append(checkPythonStatus(pythonPath))
-        deps.append(checkFunASRStatus(pythonPath))
-        deps.append(checkModelsStatus(pythonPath))
+        switch runtimeSelection.engine {
+        case .funASR:
+            deps.append(checkFunASRStatus(pythonPath))
+            deps.append(checkFunASRModelsStatus(pythonPath))
+        case .vibeVoiceMLX:
+            deps.append(checkMLXAudioStatus(pythonPath))
+            deps.append(checkMLXModelStatus(pythonPath, modelID: runtimeSelection.modelID))
+        }
 
-        let profile = detectPerformanceProfile(pythonPath: pythonPath)
+        let detection = detectPerformanceProfile(pythonPath: pythonPath, engine: runtimeSelection.engine)
+        let recommendedTier = detectRecommendedPerformanceTier(profile: detection, engine: runtimeSelection.engine)
+        let profile = profile(for: recommendedTier, detected: detection, engine: runtimeSelection.engine)
+        let detail = recommendationDetail(from: detection, recommendedTier: recommendedTier, engine: runtimeSelection.engine)
         let readyCount = deps.filter(\.isReady).count
-        let progress = "预热完成：\(readyCount)/\(deps.count) 项可用，\(profile.summary)"
+        let progress = "预热完成：\(readyCount)/\(deps.count) 项可用，\(runtimeSelection.engine.title)，推荐\(recommendedTier.title)档"
 
         return EnvironmentCheckResult(
             pythonPath: pythonPath,
             pythonSitePackages: pythonDetection.sitePackages,
             deps: deps,
             performanceProfile: profile,
+            recommendedPerformanceTier: recommendedTier,
+            recommendationDetail: detail,
             progressMessage: progress
         )
     }
 
     /// 自动探测 FunASR 对应的 Python：扫描所有 python3，逐个测试 import funasr
-    nonisolated private static func detectPython(customPythonPath: String) -> (path: String, sitePackages: String) {
+    nonisolated private static func detectPython(customPythonPath: String, engine: TranscriptionEngine) -> (path: String, sitePackages: String) {
         var candidates: [String] = []
 
         // 用户手动指定的 Python 永远优先。
@@ -140,7 +233,14 @@ class EnvironmentChecker: ObservableObject {
         appendUniquePythonCandidates(from: discoverPythonCandidates(), to: &candidates)
 
         for p in candidates {
-            guard pythonCanImportFunASR(p) else { continue }
+            let isUsable: Bool
+            switch engine {
+            case .funASR:
+                isUsable = pythonCanImportFunASR(p)
+            case .vibeVoiceMLX:
+                isUsable = pythonCanImportMLXAudio(p)
+            }
+            guard isUsable else { continue }
             return (p, sitePackagesPath(for: p))
         }
 
@@ -148,7 +248,9 @@ class EnvironmentChecker: ObservableObject {
     }
 
     nonisolated private static func discoverPythonCandidates() -> [String] {
+        let appPython = appManagedPythonPath()
         let knownPaths = [
+            appPython,
             "/opt/anaconda3/bin/python3",
             "/opt/homebrew/bin/python3",
             "/usr/local/bin/python3",
@@ -175,6 +277,24 @@ class EnvironmentChecker: ObservableObject {
             code: "import funasr; print('FUNOK')",
             cleanPythonEnvironment: true
         ).contains("FUNOK")
+    }
+
+    nonisolated private static func pythonCanImportMLXAudio(_ python: String) -> Bool {
+        runPython(
+            python,
+            code: "import importlib.util; print('MLXOK' if importlib.util.find_spec('mlx_audio') else '')",
+            cleanPythonEnvironment: true
+        ).contains("MLXOK")
+    }
+
+    nonisolated private static func appManagedPythonPath() -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home
+            .appendingPathComponent(".audiotranscriber")
+            .appendingPathComponent("venv")
+            .appendingPathComponent("bin")
+            .appendingPathComponent("python3")
+            .path
     }
 
     nonisolated private static func sitePackagesPath(for python: String) -> String {
@@ -297,7 +417,7 @@ class EnvironmentChecker: ObservableObject {
         )
     }
 
-    nonisolated private static func checkModelsStatus(_ python: String) -> DependencyStatus {
+    nonisolated private static func checkFunASRModelsStatus(_ python: String) -> DependencyStatus {
         let models = ["paraformer-zh", "fsmn-vad", "ct-punc", "cam++"]
 
         // 用 python 查 modelscope 模型缓存路径
@@ -404,7 +524,49 @@ class EnvironmentChecker: ObservableObject {
         }
     }
 
-    nonisolated private static func detectPerformanceProfile(pythonPath: String) -> PerformanceProfile {
+    nonisolated private static func checkMLXAudioStatus(_ python: String) -> DependencyStatus {
+        let code = """
+        import importlib.util
+        spec = importlib.util.find_spec('mlx_audio')
+        print('OK' if spec is not None else '')
+        """
+        let output = runPython(python, code: code, cleanPythonEnvironment: true)
+        return DependencyStatus(
+            name: "mlx-audio", icon: "cpu",
+            isReady: output.contains("OK"),
+            message: output.contains("OK") ? "✓ MLX Audio 已安装" : "✗ 此 Python 未安装 mlx_audio"
+        )
+    }
+
+    nonisolated private static func checkMLXModelStatus(_ python: String, modelID: String) -> DependencyStatus {
+        let hasMLXAudio = pythonCanImportMLXAudio(python)
+        guard hasMLXAudio else {
+            return DependencyStatus(
+                name: "mlx-model", icon: "cube.box.fill",
+                isReady: false,
+                message: "✗ 请先安装 mlx_audio 依赖"
+            )
+        }
+        let sanitizedModelID = modelID.replacingOccurrences(of: "'", with: "")
+        let code = """
+        import os
+        from huggingface_hub import snapshot_download
+        try:
+            path = snapshot_download(repo_id='\(sanitizedModelID)', local_files_only=True)
+            print(path)
+        except Exception:
+            print('')
+        """
+        let output = runPython(python, code: code, cleanPythonEnvironment: true)
+        let isReady = !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return DependencyStatus(
+            name: "mlx-model", icon: "cube.box.fill",
+            isReady: isReady,
+            message: isReady ? "✓ MLX 模型已缓存" : "✗ 未检测到 \(modelID)"
+        )
+    }
+
+    nonisolated private static func detectPerformanceProfile(pythonPath: String, engine: TranscriptionEngine) -> PerformanceProfile {
         let totalCores = intFromShell("sysctl -n hw.ncpu 2>/dev/null", fallback: ProcessInfo.processInfo.processorCount)
         let performanceCores = intFromShell("sysctl -n hw.perflevel0.physicalcpu 2>/dev/null", fallback: max(1, totalCores - 2))
         let memoryBytes = int64FromShell("sysctl -n hw.memsize 2>/dev/null", fallback: Int64(ProcessInfo.processInfo.physicalMemory))
@@ -431,10 +593,15 @@ class EnvironmentChecker: ObservableObject {
             batchSizeSeconds = 180
         }
 
-        let device = "cpu"
+        let device = engine == .vibeVoiceMLX ? "mlx" : "cpu"
         let chipText = cpuBrand.isEmpty ? "\(totalCores) 核 CPU" : cpuBrand
-        let accelerationHint = mpsAvailable ? "，检测到 MPS 可用但暂不默认启用" : ""
-        let summary = "自动性能：\(threads) 线程，batch \(batchSizeSeconds)s，CPU 稳定模式\(accelerationHint)（\(chipText)，\(memoryGB)GB）"
+        let accelerationHint: String
+        if engine == .vibeVoiceMLX {
+            accelerationHint = "，优先使用 Apple Silicon MLX"
+        } else {
+            accelerationHint = mpsAvailable ? "，检测到 MPS 可用但暂不默认启用" : ""
+        }
+        let summary = "自动性能：\(threads) 线程，batch \(batchSizeSeconds)s，\(engine == .vibeVoiceMLX ? "MLX 模式" : "CPU 稳定模式")\(accelerationHint)（\(chipText)，\(memoryGB)GB）"
 
         return PerformanceProfile(
             device: device,
@@ -443,6 +610,68 @@ class EnvironmentChecker: ObservableObject {
             mergeLengthSeconds: 15,
             speakerDiarizationEnabled: true,
             mpsAvailable: mpsAvailable,
+            summary: summary
+        )
+    }
+
+    nonisolated private static func detectRecommendedPerformanceTier(profile: PerformanceProfile, engine: TranscriptionEngine) -> PerformanceTier {
+        let memoryBytes = int64FromShell("sysctl -n hw.memsize 2>/dev/null", fallback: Int64(ProcessInfo.processInfo.physicalMemory))
+        let memoryGB = max(1, Int(memoryBytes / 1_073_741_824))
+        let threads = profile.threads
+
+        switch engine {
+        case .vibeVoiceMLX:
+            if memoryGB >= 32 && threads >= 8 {
+                return .high
+            } else if memoryGB >= 16 && threads >= 4 {
+                return .medium
+            } else {
+                return .low
+            }
+        case .funASR:
+            if memoryGB >= 24 && threads >= 6 {
+                return .high
+            } else if memoryGB >= 12 && threads >= 4 {
+                return .medium
+            } else {
+                return .low
+            }
+        }
+    }
+
+    nonisolated private static func recommendationDetail(from profile: PerformanceProfile, recommendedTier: PerformanceTier, engine: TranscriptionEngine) -> String {
+        let mode = engine == .vibeVoiceMLX ? "MLX" : "CPU"
+        return "检测结果：\(profile.summary)。当前建议采用\(recommendedTier.title)档（\(mode)）。"
+    }
+
+    nonisolated private static func profile(for tier: PerformanceTier, detected: PerformanceProfile, engine: TranscriptionEngine) -> PerformanceProfile {
+        let baseThreads: Int
+        let baseBatch: Int
+        let mergeLength: Int
+
+        switch tier {
+        case .low:
+            baseThreads = max(2, min(3, detected.threads - 2))
+            baseBatch = engine == .vibeVoiceMLX ? 120 : 120
+            mergeLength = 10
+        case .medium:
+            baseThreads = max(3, min(detected.threads, 6))
+            baseBatch = engine == .vibeVoiceMLX ? 180 : 180
+            mergeLength = 12
+        case .high:
+            baseThreads = max(detected.threads, engine == .vibeVoiceMLX ? 6 : 4)
+            baseBatch = engine == .vibeVoiceMLX ? 300 : 240
+            mergeLength = 15
+        }
+
+        let summary = "当前档位：\(tier.title)（\(detected.summary)）"
+        return PerformanceProfile(
+            device: detected.device,
+            threads: baseThreads,
+            batchSizeSeconds: baseBatch,
+            mergeLengthSeconds: mergeLength,
+            speakerDiarizationEnabled: true,
+            mpsAvailable: detected.mpsAvailable,
             summary: summary
         )
     }
@@ -486,21 +715,50 @@ class EnvironmentChecker: ObservableObject {
             return
         }
 
-        let command = "\"\(python)\" -m pip install -U funasr modelscope openai"
+        let managedPython = Self.appManagedPythonPath()
+        let managedVenv = (managedPython as NSString).deletingLastPathComponent
+        let managedVenvRoot = (managedVenv as NSString).deletingLastPathComponent
+        let command: String
+        switch runtimeSelection.engine {
+        case .funASR:
+            command = """
+            mkdir -p "\(managedVenvRoot)" && \
+            "\(python)" -m venv "\(managedVenvRoot)" && \
+            "\(managedPython)" -m pip install -U pip setuptools wheel && \
+            "\(managedPython)" -m pip install -U funasr modelscope openai
+            """
+        case .vibeVoiceMLX:
+            command = """
+            mkdir -p "\(managedVenvRoot)" && \
+            "\(python)" -m venv "\(managedVenvRoot)" && \
+            "\(managedPython)" -m pip install -U pip setuptools wheel && \
+            "\(managedPython)" -m pip install -U mlx-audio huggingface_hub openai
+            """
+        }
         openTerminal(command: command)
-        installMessage = "已打开 Terminal 安装 Python 依赖。"
+        installMessage = "已打开 Terminal，为 \(runtimeSelection.engine.title) 创建独立环境并安装依赖。"
     }
 
     func installModels() {
-        let python = pythonPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let managedPython = Self.appManagedPythonPath()
+        let fallbackPython = pythonPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let python = FileManager.default.isExecutableFile(atPath: managedPython) ? managedPython : fallbackPython
         guard !python.isEmpty, FileManager.default.isExecutableFile(atPath: python) else {
-            installMessage = "请先选择有效的 Python 可执行文件。"
+            installMessage = "请先安装依赖，应用会先创建自己的 Python 环境。"
             return
         }
 
-        let code = "from funasr import AutoModel; AutoModel(model='paraformer-zh', vad_model='fsmn-vad', punc_model='ct-punc', spk_model='cam++', device='cpu', disable_update=True)"
-        openTerminal(command: "\"\(python)\" -c \"\(code)\"")
-        installMessage = "已打开 Terminal 下载 FunASR 模型。"
+        let command: String
+        switch runtimeSelection.engine {
+        case .funASR:
+            let code = "from funasr import AutoModel; AutoModel(model='paraformer-zh', vad_model='fsmn-vad', punc_model='ct-punc', spk_model='cam++', device='cpu', disable_update=True)"
+            command = "\"\(python)\" -c \"\(code)\""
+        case .vibeVoiceMLX:
+            let repo = runtimeSelection.modelID.replacingOccurrences(of: "\"", with: "")
+            command = "\"\(python)\" -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='\(repo)')\""
+        }
+        openTerminal(command: command)
+        installMessage = "已打开 Terminal 下载 \(runtimeSelection.engine.title) 模型。"
     }
 
     private func isBrewInstalled() -> Bool {
@@ -525,5 +783,14 @@ class EnvironmentChecker: ObservableObject {
 
     func refreshAfterExternalInstall() {
         check()
+    }
+
+    nonisolated private static func requiredDependencyNames(for engine: TranscriptionEngine) -> [String] {
+        switch engine {
+        case .funASR:
+            return ["ffmpeg", "python3", "funasr", "models"]
+        case .vibeVoiceMLX:
+            return ["ffmpeg", "python3", "mlx-audio", "mlx-model"]
+        }
     }
 }
