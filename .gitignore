@@ -1,13 +1,21 @@
+# macOS
 .DS_Store
+
+# Xcode
 build/
 dist/
 DerivedData/
 *.xcuserdata/
 *.xcuserstate
 *.xcscmblueprint
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 .env
 .venv/
 venv/
+
+# Claude Code
+.claude/
