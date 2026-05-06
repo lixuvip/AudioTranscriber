@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="AudioTranscriber"
-PROJECT_PATH="$ROOT_DIR/AudioTranscriber.xcodeproj"
+APP_NAME="VoiceScribe"
+PROJECT_PATH="$ROOT_DIR/VoiceScribe.xcodeproj"
 SCHEME="$APP_NAME"
 DERIVED_DATA="$ROOT_DIR/build/DerivedData"
 RELEASE_APP="$DERIVED_DATA/Build/Products/Release/$APP_NAME.app"
