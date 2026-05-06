@@ -28,8 +28,8 @@ struct PerformanceProfile {
 
     static let automatic = PerformanceProfile(
         device: "cpu",
-        threads: 4,
-        batchSizeSeconds: 240,
+        threads: 2,
+        batchSizeSeconds: 60,
         mergeLengthSeconds: 15,
         speakerDiarizationEnabled: true,
         mpsAvailable: false,
@@ -82,6 +82,8 @@ class EnvironmentChecker: ObservableObject {
     @Published var selectedPerformanceTier: PerformanceTier = .medium
     @Published var recommendationDetail: String = "尚未预热"
     var customPythonPath: String = ""
+    var savedPerformanceTier: PerformanceTier?
+
     var runtimeSelection = RuntimeSelection(
         environment: .macAppleSilicon,
         engine: .funASR,
@@ -160,7 +162,14 @@ class EnvironmentChecker: ObservableObject {
                 self.deps = result.deps
                 self.performanceProfile = result.performanceProfile
                 self.recommendedPerformanceTier = result.recommendedPerformanceTier
-                self.selectedPerformanceTier = result.recommendedPerformanceTier
+                // 优先恢复用户上次手动选择的档位
+                if let saved = self.savedPerformanceTier {
+                    self.selectedPerformanceTier = saved
+                    self.applyPerformanceTier(saved)
+                    self.savedPerformanceTier = nil
+                } else {
+                    self.selectedPerformanceTier = result.recommendedPerformanceTier
+                }
                 self.recommendationDetail = result.recommendationDetail
                 self.checkProgress = result.progressMessage
                 self.isChecking = false
@@ -290,7 +299,7 @@ class EnvironmentChecker: ObservableObject {
     nonisolated private static func appManagedPythonPath() -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home
-            .appendingPathComponent(".audiotranscriber")
+            .appendingPathComponent(".voicescribe")
             .appendingPathComponent("venv")
             .appendingPathComponent("bin")
             .appendingPathComponent("python3")
@@ -576,21 +585,23 @@ class EnvironmentChecker: ObservableObject {
 
         let usefulCores = max(1, performanceCores > 0 ? performanceCores : totalCores)
         let threads: Int
-        if memoryGB >= 32 && usefulCores >= 8 {
-            threads = min(usefulCores, 8)
+        // 限制线程数避免 CPU 占满：最多使用一半性能核心
+        if memoryGB >= 32 && usefulCores >= 10 {
+            threads = min(usefulCores / 2, 6)
         } else if memoryGB >= 16 && usefulCores >= 6 {
-            threads = min(usefulCores, 6)
+            threads = min(usefulCores / 2, 4)
         } else {
-            threads = min(max(2, usefulCores), 4)
+            threads = min(max(1, usefulCores / 2), 2)
         }
 
         let batchSizeSeconds: Int
-        if memoryGB >= 32 && usefulCores >= 8 {
-            batchSizeSeconds = 360
+        // 减小批处理大小以降低内存峰值
+        if memoryGB >= 32 {
+            batchSizeSeconds = 120
         } else if memoryGB >= 16 {
-            batchSizeSeconds = 300
+            batchSizeSeconds = 90
         } else {
-            batchSizeSeconds = 180
+            batchSizeSeconds = 60
         }
 
         let device = engine == .vibeVoiceMLX ? "mlx" : "cpu"
@@ -621,17 +632,17 @@ class EnvironmentChecker: ObservableObject {
 
         switch engine {
         case .vibeVoiceMLX:
-            if memoryGB >= 32 && threads >= 8 {
+            if memoryGB >= 32 && threads >= 4 {
                 return .high
-            } else if memoryGB >= 16 && threads >= 4 {
+            } else if memoryGB >= 16 {
                 return .medium
             } else {
                 return .low
             }
         case .funASR:
-            if memoryGB >= 24 && threads >= 6 {
+            if memoryGB >= 24 && threads >= 4 {
                 return .high
-            } else if memoryGB >= 12 && threads >= 4 {
+            } else if memoryGB >= 12 {
                 return .medium
             } else {
                 return .low
@@ -651,16 +662,16 @@ class EnvironmentChecker: ObservableObject {
 
         switch tier {
         case .low:
-            baseThreads = max(2, min(3, detected.threads - 2))
-            baseBatch = engine == .vibeVoiceMLX ? 120 : 120
+            baseThreads = max(1, min(2, detected.threads - 1))
+            baseBatch = 60
             mergeLength = 10
         case .medium:
-            baseThreads = max(3, min(detected.threads, 6))
-            baseBatch = engine == .vibeVoiceMLX ? 180 : 180
+            baseThreads = max(2, min(detected.threads, 4))
+            baseBatch = engine == .vibeVoiceMLX ? 90 : 90
             mergeLength = 12
         case .high:
-            baseThreads = max(detected.threads, engine == .vibeVoiceMLX ? 6 : 4)
-            baseBatch = engine == .vibeVoiceMLX ? 300 : 240
+            baseThreads = max(detected.threads, engine == .vibeVoiceMLX ? 4 : 2)
+            baseBatch = engine == .vibeVoiceMLX ? 120 : 120
             mergeLength = 15
         }
 

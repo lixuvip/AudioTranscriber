@@ -118,6 +118,10 @@ class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(summaryPrompt, forKey: "summaryPrompt") }
     }
 
+    @Published var performanceTier: String {
+        didSet { UserDefaults.standard.set(performanceTier, forKey: "performanceTier") }
+    }
+
     init() {
         let saved = UserDefaults.standard.string(forKey: "selectedModel") ?? ""
         selectedModel = saved
@@ -141,6 +145,8 @@ class SettingsManager: ObservableObject {
         let savedModelID = UserDefaults.standard.string(forKey: "transcriptionModelID") ?? ""
         transcriptionModelID = savedModelID.isEmpty ? resolvedEngine.defaultModelID : savedModelID
         summaryPrompt = UserDefaults.standard.string(forKey: "summaryPrompt") ?? ""
+        let savedTier = UserDefaults.standard.string(forKey: "performanceTier") ?? ""
+        performanceTier = PerformanceTier.allCases.contains(where: { $0.rawValue == savedTier }) ? savedTier : ""
     }
 
     var allModels: [(id: String, name: String)] {

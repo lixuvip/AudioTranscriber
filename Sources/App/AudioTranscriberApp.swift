@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct AudioTranscriberApp: App {
+struct VoiceScribeApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

@@ -14,11 +14,16 @@ class Transcriber: ObservableObject {
     @Published var currentTranscriptURL: URL?
     @Published var currentSpeakerMapURL: URL?
     @Published var currentSpeakerTextURL: URL?
+    @Published var pendingHistoryEntry: TranscriptionHistoryEntry?
 
     private var currentTask: Process?
     private var didRequestStop = false
     private var currentTranscriptSegments: [TranscriptSegment] = []
     private var currentTranscriptTitle: String = ""
+    private var transcriptionStartTime: Date?
+    private var currentEngine: String = ""
+    private var currentModelID: String = ""
+    private var currentOutputDir: URL?
 
     var bundleScriptsDir: URL {
         if Bundle.main.resourceURL != nil {
@@ -44,6 +49,11 @@ class Transcriber: ObservableObject {
         logs = []
         progress = 0
         currentProgress = "准备中..."
+        pendingHistoryEntry = nil
+        transcriptionStartTime = Date()
+        currentEngine = engine.rawValue
+        currentModelID = modelID.isEmpty ? engine.defaultModelID : modelID
+        currentOutputDir = outDir
 
         let scriptPath = bundleScriptsDir.appendingPathComponent("transcribe.py").path
         var env = ProcessInfo.processInfo.environment
@@ -76,6 +86,7 @@ class Transcriber: ObservableObject {
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = outputPipe
+        process.standardInput = FileHandle.nullDevice
         currentTask = process
 
         outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -184,6 +195,7 @@ class Transcriber: ObservableObject {
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = outputPipe
+        process.standardInput = FileHandle.nullDevice
 
         outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -228,6 +240,7 @@ class Transcriber: ObservableObject {
             currentProgress = "完成 ✓"
             appendLog("✓ 完成")
             loadSpeakerRolesIfNeeded()
+            createHistoryEntry()
         } else if isTranscribing {
             appendLog("✗ 转写失败 (exit: \(status))")
             progress = 0
@@ -243,6 +256,22 @@ class Transcriber: ObservableObject {
     private func appendLog(_ line: String) {
         if logs.count > 500 { logs.removeFirst() }
         logs.append(line)
+    }
+
+    private func createHistoryEntry() {
+        let duration = transcriptionStartTime.map { Date().timeIntervalSince($0) }
+        let entry = TranscriptionHistoryEntry(
+            fileName: currentTranscriptTitle,
+            filePath: currentTranscriptURL?.path ?? "",
+            outputDir: currentOutputDir?.path ?? "",
+            engine: currentEngine,
+            modelID: currentModelID,
+            date: Date(),
+            duration: duration,
+            segmentCount: currentTranscriptSegments.count,
+            speakerCount: speakerRoles.count
+        )
+        pendingHistoryEntry = entry
     }
 
     private func loadSpeakerRolesIfNeeded() {

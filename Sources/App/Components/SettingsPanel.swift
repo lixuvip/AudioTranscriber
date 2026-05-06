@@ -176,40 +176,79 @@ struct SettingsPanel: View {
             }
 
             // LLM 模型
-            HStack(spacing: 10) {
-                Image(systemName: "brain")
-                    .foregroundColor(Color(hex: "7C6FE3"))
-                    .frame(width: 16)
-                Text("LLM")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Color(hex: "A0A0B0"))
-                    .frame(width: 60, alignment: .leading)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: "brain")
+                        .foregroundColor(Color(hex: "7C6FE3"))
+                        .frame(width: 16)
+                    Text("LLM")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                        .frame(width: 60, alignment: .leading)
+
+                    Spacer()
+
+                    Button(action: { showingAddModel = true }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 12))
+                            Text("添加模型")
+                                .font(.system(size: 12))
+                        }
+                        .foregroundColor(Color(hex: "7C6FE3"))
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 if settingsManager.customModels.isEmpty {
-                    Text("请先添加线上模型")
-                        .font(.system(size: 12))
+                    Text("请添加线上模型以使用摘要功能")
+                        .font(.system(size: 11))
                         .foregroundColor(Color(hex: "A0A0B0"))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .background(Color(hex: "1E1E2E"))
-                        .cornerRadius(6)
+                        .padding(.leading, 86)
                 } else {
-                    Picker("", selection: $settingsManager.selectedModel) {
-                        ForEach(settingsManager.customModels) { m in
-                            Text("\(m.name) (\(m.id))").tag(m.id)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .background(Color(hex: "1E1E2E"))
-                    .cornerRadius(6)
-                }
+                    ForEach(settingsManager.customModels) { model in
+                        let isSelected = model.id == settingsManager.selectedModel
+                        HStack(spacing: 10) {
+                            Button(action: {
+                                settingsManager.selectedModel = model.id
+                            }) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(isSelected ? Color(hex: "7C6FE3") : Color(hex: "5A5A6C"))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(model.name)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(.white)
+                                        Text("\(model.id) · \(model.providerType.title)")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(Color(hex: "A0A0B0"))
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
 
-                Button(action: { showingAddModel = true }) {
-                    Image(systemName: "plus.circle")
-                        .font(.system(size: 14))
-                        .foregroundColor(Color(hex: "7C6FE3"))
+                            Spacer()
+
+                            Button(action: {
+                                settingsManager.deleteModel(id: model.id)
+                            }) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Color(hex: "F08A8A"))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(10)
+                        .padding(.leading, 76)
+                        .background(isSelected ? Color(hex: "2A2A4C") : Color(hex: "1E1E2E"))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(isSelected ? Color(hex: "7C6FE3") : Color.clear, lineWidth: 1)
+                        )
+                    }
                 }
-                .buttonStyle(.plain)
             }
 
             if !settingsManager.customModels.isEmpty {
@@ -238,39 +277,6 @@ struct SettingsPanel: View {
                         Text("示例：请重点整理决策事项和待办；请按角色分别总结观点；请保留争议点和风险点")
                             .font(.system(size: 11))
                             .foregroundColor(Color(hex: "A0A0B0"))
-                    }
-
-                    Text("已添加模型")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(hex: "A0A0B0"))
-
-                    ForEach(settingsManager.customModels) { model in
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(model.name)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.white)
-                                Text("\(model.providerType.title) · \(model.apiBase)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(Color(hex: "A0A0B0"))
-                                    .lineLimit(1)
-                                Text(model.id)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(Color(hex: "7C6FE3"))
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            Button(action: {
-                                settingsManager.deleteModel(id: model.id)
-                            }) {
-                                Image(systemName: "trash")
-                                    .foregroundColor(Color(hex: "F08A8A"))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(10)
-                        .background(Color(hex: "1E1E2E"))
-                        .cornerRadius(8)
                     }
                 }
             }

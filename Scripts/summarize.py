@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AudioTranscriber - 总结脚本
+VoiceScribe - 摘要脚本
 用法: python3 summarize.py <转写文本路径> <模型名> [--api-base URL] [--api-key KEY] [--provider-type TYPE]
 """
 import os
@@ -34,8 +34,8 @@ else:
     summary_base = base
 out_path = os.path.join(os.path.dirname(text_path), f"{summary_base}_摘要.md")
 
-print(f"[AudioTranscriber] 读取转写文本: {text_path}")
-print(f"[AudioTranscriber] 使用模型: {model_name}")
+print(f"[VoiceScribe] 读取转写文本: {text_path}")
+print(f"[VoiceScribe] 使用模型: {model_name}")
 
 # 读取 API Key
 api_key = args.api_key or os.environ.get("OPENAI_API_KEY", "")
@@ -43,7 +43,7 @@ default_api_base = "https://api.anthropic.com/v1/messages" if args.provider_type
 api_base = args.api_base or os.environ.get("OPENAI_API_BASE", default_api_base)
 
 if not api_key:
-    print("[AudioTranscriber] 错误: 请设置 OPENAI_API_KEY 环境变量")
+    print("[VoiceScribe] 错误: 请设置 OPENAI_API_KEY 环境变量")
     sys.exit(1)
 
 prompt = f"""请阅读以下通话记录，生成一份简明摘要，包含：
@@ -60,7 +60,7 @@ extra_prompt = args.summary_prompt.strip()
 if extra_prompt:
     prompt += f"\n\n额外要求：{extra_prompt}"
 
-print(f"[AudioTranscriber] 调用 LLM 生成摘要...")
+print(f"[VoiceScribe] 调用 LLM 生成摘要...")
 
 try:
     if args.provider_type == "anthropicMessages":
@@ -126,13 +126,18 @@ try:
         raise RuntimeError("模型返回为空，未生成摘要内容")
 except urllib.error.HTTPError as e:
     detail = e.read().decode("utf-8", errors="ignore")
-    print(f"[AudioTranscriber] LLM 调用失败: HTTP {e.code} {detail}")
+    hint = ""
+    if e.code == 404:
+        hint = "（提示：请检查 API Base URL 是否正确，DeepSeek 使用 https://api.deepseek.com/v1，接口形态选 OpenAI Compatible）"
+    elif e.code == 401 or e.code == 403:
+        hint = "（提示：API Key 无效或无权访问该模型）"
+    print(f"[VoiceScribe] LLM 调用失败: HTTP {e.code} - {detail[:300]}{hint}")
     sys.exit(1)
 except Exception as e:
-    print(f"[AudioTranscriber] LLM 调用失败: {e}")
+    print(f"[VoiceScribe] LLM 调用失败: {e}")
     sys.exit(1)
 
 with open(out_path, 'w', encoding='utf-8') as f:
     f.write(f"# 摘要\n\n{summary}\n\n---\n原始转写: {os.path.basename(text_path)}\n")
 
-print(f"[AudioTranscriber] 摘要已保存: {out_path}")
+print(f"[VoiceScribe] 摘要已保存: {out_path}")

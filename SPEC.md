@@ -1,10 +1,10 @@
-# AudioTranscriber - 项目规格
+# VoiceScribe - 项目规格
 
 ## 1. 项目概述
 
-**名称:** AudioTranscriber
-**Bundle Identifier:** com.audiotools.transcriber
-**Core Functionality:** 本地音频转写工具，支持 FunASR 离线转写、自动说话人分离、LLM 总结
+**名称:** VoiceScribe
+**Bundle Identifier:** com.voicescribe.app
+**Core Functionality:** 本地音频转写工具，支持 FunASR / VibeVoice MLX 双引擎、自动说话人分离、LLM 摘要
 **Target Users:** 需要转录会议、访谈、播客的用户
 **macOS Version:** macOS 13.0+
 **Architecture:** SwiftUI (View) + Python (Backend via Process)
@@ -45,7 +45,7 @@
 
 ```
 ┌─────────────────────────────────────────┐
-│  Title: "AudioTranscriber"              │  ← 标题栏
+│  Title: "VoiceScribe"              │  ← 标题栏
 ├─────────────────────────────────────────┤
 │  [状态卡片] 环境检测面板                  │
 │  - 检测 ffmpeg ✓ / funasr ✓ / 模型     │
@@ -105,7 +105,7 @@
 ## 4. 技术规格
 
 ### 前端 (SwiftUI)
-- 入口: `AudioTranscriberApp.swift` (@main)
+- 入口: `VoiceScribeApp.swift` (@main)
 - 主视图: `ContentView.swift`
 - 组件: `StatusCard.swift`, `FileDropZone.swift`, `SettingsPanel.swift`, `LogView.swift`
 - Python 调用: `Process` (Foundation)

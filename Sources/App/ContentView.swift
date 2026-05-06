@@ -6,6 +6,7 @@ struct ContentView: View {
     @StateObject private var envChecker = EnvironmentChecker()
     @StateObject private var transcriber = Transcriber()
     @StateObject private var settingsManager = SettingsManager()
+    @StateObject private var historyManager = HistoryManager()
 
     @State private var selectedFileURL: URL?
     @State private var customOutputDir: String = ""
@@ -13,6 +14,8 @@ struct ContentView: View {
     @State private var showingFilePicker = false
     @State private var showingFolderPicker = false
     @State private var showingPythonPicker = false
+    @State private var showSetup = true
+    @State private var activeTab: MainTab = .transcribe
 
     private var outputDir: URL? {
         customOutputDir.isEmpty ? nil : URL(fileURLWithPath: customOutputDir)
@@ -22,40 +25,96 @@ struct ContentView: View {
         outputDir ?? selectedFileURL?.deletingLastPathComponent()
     }
 
+    enum MainTab {
+        case transcribe
+        case history
+    }
+
     var body: some View {
+        Group {
+            if showSetup {
+                SetupView(
+                    envChecker: envChecker,
+                    settingsManager: settingsManager,
+                    onComplete: { showSetup = false },
+                    onSkip: { showSetup = false }
+                )
+                .transition(.opacity)
+            } else {
+                mainContent
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: showSetup)
+        .background(Color(hex: "1E1E2E"))
+        .onAppear {
+            envChecker.customPythonPath = settingsManager.pythonPath
+            envChecker.updateRuntimeSelection(
+                environment: settingsManager.runtimeEnvironment,
+                engine: settingsManager.transcriptionEngine,
+                modelID: settingsManager.transcriptionModelID
+            )
+            envChecker.initialize(cachedPythonPath: settingsManager.pythonPath)
+            if let savedTier = PerformanceTier.allCases.first(where: { $0.rawValue == settingsManager.performanceTier }) {
+                envChecker.savedPerformanceTier = savedTier
+            }
+        }
+    }
+
+    // MARK: - 主页面
+
+    private var mainContent: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
                 Image(systemName: "waveform.circle.fill")
                     .font(.system(size: 26))
                     .foregroundColor(Color(hex: "7C6FE3"))
-                Text("AudioTranscriber")
+                Text("VoiceScribe")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.white)
+
+                // 环境状态小图标
+                if envChecker.hasChecked {
+                    Image(systemName: envChecker.allReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(envChecker.allReady ? Color(hex: "4EC9B0") : Color(hex: "F5A623"))
+                }
+
                 Spacer()
-                Button(action: {
-                    envChecker.updateRuntimeSelection(
-                        environment: settingsManager.runtimeEnvironment,
-                        engine: settingsManager.transcriptionEngine,
-                        modelID: settingsManager.transcriptionModelID
-                    )
-                    envChecker.customPythonPath = settingsManager.pythonPath
-                    envChecker.check()
-                }) {
-                    Image(systemName: "arrow.clockwise")
-                        .foregroundColor(Color(hex: "A0A0B0"))
+
+                // 回到设置
+                Button(action: { showSetup = true }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "gear")
+                            .font(.system(size: 12))
+                        Text("设置")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundColor(Color(hex: "A0A0B0"))
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 24)
             .padding(.top, 18)
-            .padding(.bottom, 14)
+            .padding(.bottom, 10)
+
+            // 标签栏
+            HStack(spacing: 0) {
+                tabButton(title: "转写", icon: "waveform", tab: .transcribe)
+                tabButton(title: "历史", icon: "clock.arrow.circlepath", tab: .history)
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 8)
 
             ScrollView {
+                if activeTab == .history {
+                    HistoryView(historyManager: historyManager)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 4)
+                } else {
                 VStack(spacing: 14) {
-                    // 环境状态
-                    StatusCard(envChecker: envChecker)
-
                     // 文件拖拽
                     FileDropZone(
                         selectedFileURL: $selectedFileURL,
@@ -96,7 +155,7 @@ struct ContentView: View {
                     HStack(spacing: 12) {
                         Button(action: {
                             guard envChecker.hasChecked else {
-                                envChecker.warmUp()
+                                showSetup = true
                                 return
                             }
                             transcriber.startTranscription(
@@ -111,12 +170,12 @@ struct ContentView: View {
                         }) {
                             HStack {
                                 Image(systemName: "play.fill")
-                            Text(envChecker.hasChecked ? "开始转写" : "先预热环境")
+                                Text(envChecker.hasChecked ? "开始转写" : "先预热环境")
+                            }
+                            .frame(maxWidth: .infinity)
                         }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || envChecker.isChecking || (envChecker.hasChecked && !envChecker.allReady))
+                        .buttonStyle(PrimaryButtonStyle())
+                        .disabled(transcriber.isTranscribing || transcriber.isSummarizing || selectedFileURL == nil || envChecker.isChecking || (envChecker.hasChecked && !envChecker.allReady))
 
                         Button(action: {
                             guard let model = settingsManager.customModels.first(where: { $0.id == settingsManager.selectedModel }) else { return }
@@ -205,17 +264,17 @@ struct ContentView: View {
                     }
                 }
                 .padding(.bottom, 16)
+                } // else (transcribe tab)
             }
         }
-        .background(Color(hex: "1E1E2E"))
-        .onAppear {
-            envChecker.customPythonPath = settingsManager.pythonPath
-            envChecker.updateRuntimeSelection(
-                environment: settingsManager.runtimeEnvironment,
-                engine: settingsManager.transcriptionEngine,
-                modelID: settingsManager.transcriptionModelID
-            )
-            envChecker.initialize(cachedPythonPath: settingsManager.pythonPath)
+        .onChange(of: transcriber.pendingHistoryEntry) { entry in
+            if let entry = entry {
+                historyManager.add(entry)
+                transcriber.pendingHistoryEntry = nil
+            }
+        }
+        .onChange(of: envChecker.selectedPerformanceTier) { tier in
+            settingsManager.performanceTier = tier.rawValue
         }
         .fileImporter(
             isPresented: $showingFilePicker,
@@ -277,9 +336,29 @@ struct ContentView: View {
             }
         })
     }
+
+    // MARK: - 标签按钮
+
+    private func tabButton(title: String, icon: String, tab: MainTab) -> some View {
+        let isActive = activeTab == tab
+        return Button(action: { activeTab = tab }) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                Text(title)
+                    .font(.system(size: 13, weight: isActive ? .semibold : .regular))
+            }
+            .foregroundColor(isActive ? Color(hex: "7C6FE3") : Color(hex: "5A5A6C"))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(isActive ? Color(hex: "7C6FE3").opacity(0.12) : Color.clear)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+    }
 }
 
-private struct PythonExecutablePicker: NSViewRepresentable {
+struct PythonExecutablePicker: NSViewRepresentable {
     @Binding var isPresented: Bool
     var onSelect: (URL?) -> Void
 
