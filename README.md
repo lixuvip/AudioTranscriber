@@ -2,6 +2,18 @@
 
 macOS 本地音频转写工具。支持 FunASR + cam++ 和 VibeVoice MLX 双引擎，自动说话人分离，LLM 摘要生成，转写历史管理。所有处理均在本地完成，不上传音频到第三方服务。
 
+## 依赖的开源项目
+
+本项目的核心转写能力来自以下开源项目，感谢它们的作者和社区：
+
+| 项目 | 说明 | 链接 |
+|------|------|------|
+| **FunASR** | 通义语音团队出品的端到端语音识别工具包，本项目使用的 `paraformer-zh` 中文 ASR 模型来自这里 | [GitHub](https://github.com/modelscope/FunASR) |
+| **cam++** | FunASR 生态下的说话人验证/区分模型，用于自动识别不同说话人 | [GitHub](https://github.com/modelscope/FunASR) |
+| **VibeVoice** | 基于 Apple Silicon MLX 框架的语音识别模型，提供本地高效转写能力 | [GitHub](https://github.com/VibeVoiceAI/VibeVoice) |
+| **mlx-audio** | Apple MLX 生态下的音频处理库，用于加载和运行 MLX 格式的语音模型 | [GitHub](https://github.com/lucasnewman/mlx-audio) |
+| **huggingface_hub** | Hugging Face 模型下载与缓存管理 | [GitHub](https://github.com/huggingface/huggingface_hub) |
+
 `stt` `asr` `speech-to-text` `audio-transcription` `funasr` `mlx` `cam++` `speaker-diarization` `macos` `swiftui` `python` `offline` `local` `meeting-notes` `chinese`
 
 ## 截图
