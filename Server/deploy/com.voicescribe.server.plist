@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicescribe.server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@SERVER_ROOT@/run_server.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HF_ENDPOINT</key>
+        <string>https://huggingface.co</string>
+        <key>HTTP_PROXY</key>
+        <string>http://127.0.0.1:7897</string>
+        <key>HTTPS_PROXY</key>
+        <string>http://127.0.0.1:7897</string>
+        <key>http_proxy</key>
+        <string>http://127.0.0.1:7897</string>
+        <key>https_proxy</key>
+        <string>http://127.0.0.1:7897</string>
+        <key>NO_PROXY</key>
+        <string>localhost,127.0.0.1,hf-mirror.com</string>
+        <key>no_proxy</key>
+        <string>localhost,127.0.0.1,hf-mirror.com</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@HOME@/.cache/VoiceScribeServer/logs/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>@HOME@/.cache/VoiceScribeServer/logs/stderr.log</string>
+</dict>
+</plist>

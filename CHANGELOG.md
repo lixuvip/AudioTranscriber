@@ -1,5 +1,55 @@
 # Changelog
 
+## v1.0.0-beta.2 (unreleased)
+
+三引擎支持、UI 重构为三栏布局、音频播放与波形可视化。
+
+### 新增
+
+**Qwen3-ASR 引擎**
+- 新增 Qwen3-ASR 转写引擎（`TranscriptionEngine.qwen3ASR`），Apple Silicon MLX 原生加速
+- 支持两个模型变体：`Qwen/Qwen3-ASR-0.6B`（默认）和 `Qwen/Qwen3-ASR-1.7B`
+- 每个引擎添加 `availableModelIDs` 列表，方便未来扩展模型选择 UI
+- FunASR 新增模型：`iic/speech_SenseVoiceSmall`、`FunAudioLLM/Fun-ASR-Nano-2512`
+
+**三栏布局 UI**
+- 新增左侧导航栏 `SidebarView`，支持工作区 / 批量队列 / 编辑器 / 历史 / 设置五个标签页
+- 侧边栏显示环境就绪状态、CPU/内存使用率监控
+- 新增 `WaveformVisualizer` 波形可视化组件，支持动画效果
+- 新增 `AIInsightsPanel`，提供会议纪要 / 行动项 / 宣发文案三个 Tab
+
+**音频播放**
+- `Transcriber` 新增音频播放能力（`AVAudioPlayer`），支持播放/暂停/速度调节
+- 播放进度与波形动画联动
+
+**转写增强**
+- 转写前内存预检，不足时自动降级性能档位并提示用户
+- `transcribe.py` 新增结构化进度输出（JSON），支持实时百分比和 ETA
+- 转写完成摘要卡片，显示引擎/模型/耗时/说话人数等统计
+- 转写错误结构化解析，Swift 端可区分错误类型
+
+### 优化
+
+**SettingsManager**
+- 新增 `hfToken` 持久化（HuggingFace 门控模型下载）
+- 新增 `lastSummaryModelID` 持久化，记住上次摘要使用的模型
+- 模型 ID 初始化时按引擎前缀校验，无效时回退默认值
+- `LLMProviderType` 扩展为 OpenAI Compatible / OpenAI Responses / Anthropic Messages
+
+**EnvironmentChecker**
+- 新增 Qwen3-ASR 依赖检测和模型缓存检查
+- 新增 `checkAvailableMemory` 内存预检方法
+- 性能档位根据引擎类型动态调整内存阈值
+
+**打包脚本**
+- `package_macos_app.sh` 更新为 VoiceScribe 项目名
+
+### 安全
+
+- `.claude/` 目录加入 `.gitignore`，防止隐私泄露
+
+---
+
 ## v1.0.0-beta (2026-05-06)
 
 首个公开测试版本。macOS 本地音频转写工具，支持双引擎转写、说话人分离和 LLM 摘要。

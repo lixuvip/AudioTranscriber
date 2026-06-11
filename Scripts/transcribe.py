@@ -4,6 +4,7 @@ VoiceScribe - 转写脚本
 用法: python3 transcribe.py <音频路径> <输出目录>
 """
 import os, sys, json, time, gc
+os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "")
 import argparse
 import subprocess
 import tempfile
@@ -49,6 +50,50 @@ try:
     print(f"[VoiceScribe] PyTorch 线程限制为 {threads}")
 except ImportError:
     pass
+
+
+# ---- 结构化进度输出 ----
+def emit_progress(stage, percent, processed_seconds=0, total_seconds=0):
+    """输出 JSON 格式的进度信息供 Swift 端解析"""
+    payload = {
+        "type": "progress",
+        "stage": stage,
+        "percent": round(percent, 1),
+        "processed_seconds": round(processed_seconds, 1),
+        "total_seconds": round(total_seconds, 1),
+    }
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def emit_duration(total_seconds):
+    """输出音频总时长"""
+    payload = {"type": "duration", "total_seconds": round(total_seconds, 1)}
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def emit_error(code, message, suggestion=""):
+    """输出结构化错误信息"""
+    payload = {
+        "type": "error",
+        "code": code,
+        "message": message,
+        "suggestion": suggestion,
+    }
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def get_audio_duration(path):
+    """使用 ffprobe 获取音频时长（秒）"""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=10
+        )
+        duration = float(result.stdout.strip())
+        return duration
+    except Exception:
+        return None
 
 
 def role_name_from_index(index):
@@ -228,6 +273,65 @@ def format_mlx_markdown(result):
     return payload, lines, roles, normalized_segments
 
 
+def format_qwen3_markdown(result, diarize_enabled):
+    """Parse mlx-qwen3-asr TranscriptionResult into markdown + normalized segments."""
+    if diarize_enabled and result.speaker_segments:
+        segments = result.speaker_segments
+        # speaker_segments: [{speaker, start, end, text}, ...]
+    elif result.segments:
+        segments = result.segments
+        # segments: [{text, start, end}, ...] — no speaker, assign default
+        for s in segments:
+            s["speaker"] = "0"
+    elif result.text and len(result.text.strip()) > 0:
+        full_text = result.text.strip()
+        return (
+            {"engine": "qwen3ASR", "text": full_text, "language": result.language},
+            [f"# {base} 通话记录\n", full_text],
+            [{"key": "0", "placeholder": "Speaker", "displayName": "Speaker"}],
+            [{"speakerKey": "0", "placeholder": "Speaker", "start": 0.0, "end": 0.0, "text": full_text}],
+        )
+    else:
+        emit_error("no_segments", "Qwen3-ASR produced no output", "Check if audio contains valid speech")
+        sys.exit(1)
+
+    speaker_keys = []
+    for seg in segments:
+        spk = str(seg.get("speaker", "0"))
+        if spk not in speaker_keys:
+            speaker_keys.append(spk)
+    speaker_mapping, roles = build_role_mapping(speaker_keys)
+
+    lines = [f"# {base} 通话记录\n"]
+    normalized_segments = []
+    for seg in segments:
+        start = float(seg.get("start", 0))
+        end = float(seg.get("end", 0))
+        t_start = seconds_to_timestamp(start)
+        spk = str(seg.get("speaker", "0"))
+        text = (seg.get("text", "") or "").strip()
+        if not text:
+            continue
+        placeholder = speaker_mapping.get(spk, "角色?")
+        lines.append(f"[{t_start}] 【{placeholder}】 {text}")
+        normalized_segments.append({
+            "speakerKey": spk,
+            "placeholder": placeholder,
+            "start": start,
+            "end": end,
+            "text": text,
+        })
+
+    return (
+        {"engine": "qwen3ASR", "text": result.text, "language": result.language,
+         "segments": list(result.segments) if result.segments else None,
+         "speaker_segments": list(result.speaker_segments) if result.speaker_segments else None},
+        lines,
+        roles,
+        normalized_segments,
+    )
+
+
 def prepare_audio(source_path):
     """将所有音频统一转为 16kHz 单声道 WAV，确保转写引擎能可靠处理。"""
     suffix = os.path.splitext(source_path)[1].lower()
@@ -273,71 +377,189 @@ print(f"[VoiceScribe] 输出: {out_dir}")
 print(f"[VoiceScribe] 引擎: {args.engine}")
 print(f"[VoiceScribe] 模型: {args.model_id}")
 print(f"[VoiceScribe] 线程数: {threads}, 批处理: {args.batch_size_s}s, 语言: {args.language}")
-print(f"[VoiceScribe] 加载模型中...")
+
+emit_progress("准备中...", 0)
 
 t0 = time.time()
 temp_cleanup_dir = None
 
+# ---- 获取音频时长 ----
+audio_duration = get_audio_duration(audio_path)
+if audio_duration:
+    emit_duration(audio_duration)
+    print(f"[VoiceScribe] 音频时长: {audio_duration:.1f} 秒")
+
 # ---- 音频预处理（所有引擎统一） ----
+emit_progress("音频预处理...", 5, 0, audio_duration or 0)
 try:
     prepared_audio_path, temp_cleanup_dir = prepare_audio(audio_path)
 except RuntimeError as e:
-    print(f"[VoiceScribe] 错误: {e}")
+    emit_error("audio_convert_failed", str(e), "请确认音频文件完整且 ffmpeg 已正确安装")
     sys.exit(1)
+
+emit_progress("加载模型...", 10, 0, audio_duration or 0)
 
 # ---- 转写 ----
 if args.engine == "vibeVoiceMLX":
     try:
-        from mlx_audio.stt.utils import load
+        from mlx_audio.stt.utils import load_model as load
     except ModuleNotFoundError:
-        print("[VoiceScribe] 错误: 当前 Python 环境未安装 mlx_audio，请先安装 VibeVoice MLX 依赖后再试。")
+        emit_error("missing_dependency", "当前 Python 环境未安装 mlx_audio", "请在设置中点击'安装依赖'按钮")
         sys.exit(1)
 
     try:
-        print(f"[VoiceScribe] STATUS: 开始 MLX 转写...")
+        emit_progress("加载 MLX 模型...", 15, 0, audio_duration or 0)
         model = load(args.model_id)
+        emit_progress("MLX 转写中...", 25, 0, audio_duration or 0)
         res = model.generate(prepared_audio_path)
+        emit_progress("解析结果...", 90, audio_duration or 0, audio_duration or 0)
         save_payload, lines, roles, normalized_segments = format_mlx_markdown(res)
+    except MemoryError:
+        emit_error("out_of_memory", "内存不足，模型加载或转写过程中耗尽内存", "请降低性能档位或关闭其他应用后重试")
+        sys.exit(137)
     except Exception as e:
-        print(f"[VoiceScribe] ERROR: VibeVoice MLX 转写失败: {e}")
+        emit_error("transcription_failed", f"VibeVoice MLX 转写失败: {e}", "请检查模型是否已正确下载，或尝试重新预热环境")
         sys.exit(1)
+elif args.engine == "qwen3ASR":
+    # ---- Qwen3-ASR via Python API (supports speaker diarization) ----
+    # Parse model-id: supports "REPO" or "REPO:dtype=X" suffix
+    import mlx.core as mx
+    dtype = mx.float16
+    dtype_str = "float16"
+    model_id = args.model_id
+    if ":" in model_id:
+        parts = model_id.split(":", 1)
+        model_id = parts[0]
+        if "=" in parts[1]:
+            dtype_str = parts[1].split("=", 1)[1].strip()
+            dtype_map = {"float16": mx.float16, "float32": mx.float32, "bfloat16": mx.bfloat16}
+            dtype = dtype_map.get(dtype_str, mx.float16)
+
+    try:
+        from mlx_qwen3_asr.transcribe import transcribe as qwen3_transcribe
+    except ModuleNotFoundError:
+        emit_error("missing_dependency", "Qwen3-ASR not installed: pip install mlx-qwen3-asr", "Install deps in settings")
+        sys.exit(1)
+
+    use_diarize = args.speaker_diarization != "0"
+    emit_progress(f"Loading Qwen3-ASR {model_id}...", 15, 0, audio_duration or 0)
+
+    try:
+        emit_progress(f"Qwen3-ASR transcribing dtype={dtype_str} diarize={use_diarize}...", 25, 0, audio_duration or 0)
+        result = qwen3_transcribe(
+            prepared_audio_path,
+            model=model_id,
+            dtype=dtype,
+            diarize=use_diarize,
+        )
+    except Exception as e:
+        if use_diarize and ("pyannote" in str(e).lower() or "diariz" in str(e).lower()):
+            emit_progress("pyannote not available, retrying without diarization...", 30, 0, audio_duration or 0)
+            use_diarize = False
+            try:
+                result = qwen3_transcribe(
+                    prepared_audio_path,
+                    model=model_id,
+                    dtype=dtype,
+                    diarize=False,
+                )
+            except Exception as e2:
+                emit_error("transcription_failed", f"Qwen3-ASR error: {e2}", "Check deps and model installation")
+                sys.exit(1)
+        else:
+            emit_error("transcription_failed", f"Qwen3-ASR error: {e}", "Check deps and model installation")
+            sys.exit(1)
+
+    emit_progress("Parsing results...", 90, audio_duration or 0, audio_duration or 0)
+    save_payload, lines, roles, normalized_segments = format_qwen3_markdown(result, use_diarize)
+
 else:
     try:
         from funasr import AutoModel
     except ModuleNotFoundError:
-        print("[VoiceScribe] 错误: 当前 Python 环境未安装 funasr，请先安装 FunASR 依赖后再试。")
+        emit_error("missing_dependency", "当前 Python 环境未安装 funasr", "请在设置中点击'安装依赖'按钮")
         sys.exit(1)
 
     try:
-        print(f"[VoiceScribe] STATUS: 加载 FunASR 模型（语言: {args.language}）...")
-        model_kwargs = {
-            "model": "paraformer-zh",
-            "vad_model": "fsmn-vad",
-            "punc_model": "ct-punc",
-            "device": args.device if args.device != "mlx" else "cpu",
-            "disable_update": True,
-            "ncpu": threads,
-        }
-        if args.speaker_diarization == "1":
-            model_kwargs["spk_model"] = "cam++"
+        emit_progress("加载 FunASR 模型...", 15, 0, audio_duration or 0)
+
+        model_id = args.model_id
+        # Build model_kwargs based on model type
+        if "SenseVoice" in model_id:
+            # SenseVoiceSmall: unified model, built-in VAD + punctuation
+            model_kwargs = {
+                "model": model_id.replace("iic/speech_SenseVoiceSmall", "iic/speech_SenseVoiceSmall"),
+                "device": args.device if args.device != "mlx" else "cpu",
+                "disable_update": True,
+                "ncpu": threads,
+            }
+            # SenseVoiceSmall doesn't support cam++ speaker diarization
+            if args.speaker_diarization == "1":
+                print("[VoiceScribe] SenseVoiceSmall 不支持说话人区分，将标注为同一说话人")
+        elif "Fun-ASR-Nano" in model_id or "FunAudioLLM" in model_id:
+            model_kwargs = {
+                "model": model_id,
+                "device": args.device if args.device != "mlx" else "cpu",
+                "disable_update": True,
+                "ncpu": threads,
+            }
+            if args.speaker_diarization == "1":
+                print("[VoiceScribe] Fun-ASR-Nano 不支持 cam++ 说话人区分")
+        else:
+            # Default: paraformer-zh + cam++
+            model_kwargs = {
+                "model": "paraformer-zh",
+                "vad_model": "fsmn-vad",
+                "punc_model": "ct-punc",
+                "device": args.device if args.device != "mlx" else "cpu",
+                "disable_update": True,
+                "ncpu": threads,
+            }
+            if args.speaker_diarization == "1":
+                model_kwargs["spk_model"] = "cam++"
 
         model = AutoModel(**model_kwargs)
 
-        print(f"[VoiceScribe] STATUS: 转写中（batch={args.batch_size_s}s, merge={args.merge_length_s}s）...")
-        res = model.generate(
-            input=prepared_audio_path,
-            batch_size_s=args.batch_size_s,
-            merge_vad=True,
-            merge_length_s=args.merge_length_s,
-            language=args.language,
-        )
+        emit_progress("转写中...", 25, 0, audio_duration or 0)
+
+        # Generate with model-appropriate parameters
+        if "SenseVoice" in model_id:
+            res = model.generate(input=prepared_audio_path)
+        elif "Fun-ASR-Nano" in model_id or "FunAudioLLM" in model_id:
+            res = model.generate(input=prepared_audio_path, language=args.language)
+        else:
+            # 大文件分段处理
+            chunk_duration = args.batch_size_s * 30
+            if audio_duration and audio_duration > 1800:
+                total_chunks = max(1, int(audio_duration / chunk_duration) + 1)
+                print(f"[VoiceScribe] 大文件模式：预计分 {total_chunks} 段处理")
+                emit_progress(f"转写中（大文件模式）...", 25, 0, audio_duration)
+
+            res = model.generate(
+                input=prepared_audio_path,
+                batch_size_s=args.batch_size_s,
+                merge_vad=True,
+                merge_length_s=args.merge_length_s,
+                language=args.language,
+            )
+
+        emit_progress("解析结果...", 90, audio_duration or 0, audio_duration or 0)
         save_payload, lines, roles, normalized_segments = format_funasr_markdown(res)
+    except MemoryError:
+        emit_error("out_of_memory", "内存不足，模型加载或转写过程中耗尽内存", "请降低性能档位或关闭其他应用后重试")
+        sys.exit(137)
     except Exception as e:
-        print(f"[VoiceScribe] ERROR: FunASR 转写失败: {e}")
+        error_msg = str(e)
+        suggestion = "请检查日志中的详细错误信息"
+        if "model" in error_msg.lower() and ("not found" in error_msg.lower() or "download" in error_msg.lower()):
+            suggestion = "模型文件可能未下载完整，请在设置中点击'下载模型'重新下载"
+        elif "memory" in error_msg.lower() or "oom" in error_msg.lower():
+            suggestion = "内存不足，请降低性能档位或关闭其他应用后重试"
+        emit_error("transcription_failed", f"FunASR 转写失败: {e}", suggestion)
         sys.exit(1)
 
 elapsed = time.time() - t0
-print(f"[VoiceScribe] STATUS: 转写完成, 耗时 {elapsed:.1f}s")
+emit_progress("保存结果...", 95, audio_duration or 0, audio_duration or 0)
 
 # 保存 JSON
 with open(out_json, 'w', encoding='utf-8') as f:
@@ -359,11 +581,11 @@ print(f"[VoiceScribe] 角色映射已保存: {out_speaker_map}")
 
 segment_count = len(normalized_segments)
 if segment_count == 0:
-    print("[VoiceScribe] 警告: 转写结果中没有语音片段。请检查：")
-    print("[VoiceScribe]   1. 音频文件是否包含有效语音内容")
-    print("[VoiceScribe]   2. 音频语言是否与模型匹配（当前模型为中文 paraformer-zh）")
-    print("[VoiceScribe]   3. 音频质量是否足够清晰")
+    emit_error("no_segments", "转写结果中没有语音片段",
+               "请检查：1) 音频是否包含有效语音 2) 语言是否匹配 3) 音频质量是否清晰")
 print(f"[VoiceScribe] 共 {segment_count} 个片段")
+
+emit_progress("完成", 100, audio_duration or 0, audio_duration or 0)
 print(f"[VoiceScribe] Done in {elapsed:.1f}s")
 
 # 主动释放模型内存

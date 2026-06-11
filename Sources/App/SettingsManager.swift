@@ -1,9 +1,24 @@
 import Foundation
 import Combine
 
+enum ExecutionTarget: String, CaseIterable, Identifiable {
+    case local
+    case remote
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .local:
+            return "本机运行"
+        case .remote:
+            return "远程 Mac mini"
+        }
+    }
+}
+
 enum RuntimeEnvironment: String, CaseIterable, Identifiable {
     case macAppleSilicon
-    case windowsCompatible
 
     var id: String { rawValue }
 
@@ -11,8 +26,6 @@ enum RuntimeEnvironment: String, CaseIterable, Identifiable {
         switch self {
         case .macAppleSilicon:
             return "Mac"
-        case .windowsCompatible:
-            return "Windows/通用"
         }
     }
 
@@ -20,8 +33,6 @@ enum RuntimeEnvironment: String, CaseIterable, Identifiable {
         switch self {
         case .macAppleSilicon:
             return "Apple Silicon Mac，优先支持 MLX 模型"
-        case .windowsCompatible:
-            return "Windows 或跨平台 Python 环境，优先使用 FunASR"
         }
     }
 }
@@ -29,6 +40,7 @@ enum RuntimeEnvironment: String, CaseIterable, Identifiable {
 enum TranscriptionEngine: String, CaseIterable, Identifiable {
     case funASR
     case vibeVoiceMLX
+    case qwen3ASR
 
     var id: String { rawValue }
 
@@ -38,6 +50,8 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return "FunASR + cam++"
         case .vibeVoiceMLX:
             return "VibeVoice MLX"
+        case .qwen3ASR:
+            return "Qwen3-ASR"
         }
     }
 
@@ -47,15 +61,15 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return "支持 cam++ 说话人区分，适合会议转写"
         case .vibeVoiceMLX:
             return "Apple Silicon 优化，支持说话人和时间戳"
+        case .qwen3ASR:
+            return "Apple Silicon 原生 MLX，中文方言之王，8/4-bit 量化"
         }
     }
 
     static func available(for environment: RuntimeEnvironment) -> [TranscriptionEngine] {
         switch environment {
         case .macAppleSilicon:
-            return [.vibeVoiceMLX, .funASR]
-        case .windowsCompatible:
-            return [.funASR]
+            return [.vibeVoiceMLX, .qwen3ASR, .funASR]
         }
     }
 
@@ -65,6 +79,28 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return "paraformer-zh + cam++"
         case .vibeVoiceMLX:
             return "mlx-community/VibeVoice-ASR-4bit"
+        case .qwen3ASR:
+            return "Qwen/Qwen3-ASR-0.6B"
+        }
+    }
+
+    var availableModelIDs: [String] {
+        switch self {
+        case .funASR:
+            return [
+                "paraformer-zh + cam++",
+                "iic/speech_SenseVoiceSmall",
+                "FunAudioLLM/Fun-ASR-Nano-2512",
+            ]
+        case .vibeVoiceMLX:
+            return [
+                "mlx-community/VibeVoice-ASR-4bit",
+            ]
+        case .qwen3ASR:
+            return [
+                "Qwen/Qwen3-ASR-0.6B",
+                "Qwen/Qwen3-ASR-1.7B",
+            ]
         }
     }
 }
@@ -90,6 +126,10 @@ enum LLMProviderType: String, CaseIterable, Codable, Identifiable {
 
 @MainActor
 class SettingsManager: ObservableObject {
+    @Published var hfToken: String {
+        didSet { UserDefaults.standard.set(hfToken, forKey: "hfToken") }
+    }
+
     @Published var selectedModel: String {
         didSet { UserDefaults.standard.set(selectedModel, forKey: "selectedModel") }
     }
@@ -122,7 +162,30 @@ class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(performanceTier, forKey: "performanceTier") }
     }
 
+    @Published var lastSummaryModelID: String {
+        didSet { UserDefaults.standard.set(lastSummaryModelID, forKey: "lastSummaryModelID") }
+    }
+
+    @Published var executionTarget: ExecutionTarget {
+        didSet { UserDefaults.standard.set(executionTarget.rawValue, forKey: "executionTarget") }
+    }
+
+    @Published var remoteServiceURL: String {
+        didSet { UserDefaults.standard.set(remoteServiceURL, forKey: "remoteServiceURL") }
+    }
+
+    @Published var remoteTailscaleURL: String {
+        didSet { UserDefaults.standard.set(remoteTailscaleURL, forKey: "remoteTailscaleURL") }
+    }
+
+    @Published var speakerDiarizationEnabled: Bool {
+        didSet { UserDefaults.standard.set(speakerDiarizationEnabled, forKey: "speakerDiarizationEnabled") }
+    }
+
+    @Published var remoteAvailableEngines: [TranscriptionEngine] = [.vibeVoiceMLX, .funASR, .qwen3ASR]
+
     init() {
+        hfToken = UserDefaults.standard.string(forKey: "hfToken") ?? ""
         let saved = UserDefaults.standard.string(forKey: "selectedModel") ?? ""
         selectedModel = saved
 
@@ -143,10 +206,43 @@ class SettingsManager: ObservableObject {
         transcriptionEngine = resolvedEngine
 
         let savedModelID = UserDefaults.standard.string(forKey: "transcriptionModelID") ?? ""
-        transcriptionModelID = savedModelID.isEmpty ? resolvedEngine.defaultModelID : savedModelID
+        // Validate saved modelID matches the resolved engine; reset to default if not
+        let validPrefixes: [String]
+        switch resolvedEngine {
+        case .funASR:       validPrefixes = ["paraformer", "fsmn", "iic/", "damo/", "funasr", "FunAudioLLM/"]
+        case .vibeVoiceMLX: validPrefixes = ["mlx-community/VibeVoice", "mlx-community/Whisper"]
+        case .qwen3ASR:     validPrefixes = ["Qwen/Qwen3-ASR", "Qwen/Qwen3-ForcedAligner"]
+        }
+        let isValid = savedModelID.isEmpty || validPrefixes.contains(where: { savedModelID.hasPrefix($0) })
+        transcriptionModelID = isValid ? (savedModelID.isEmpty ? resolvedEngine.defaultModelID : savedModelID) : resolvedEngine.defaultModelID
         summaryPrompt = UserDefaults.standard.string(forKey: "summaryPrompt") ?? ""
         let savedTier = UserDefaults.standard.string(forKey: "performanceTier") ?? ""
         performanceTier = PerformanceTier.allCases.contains(where: { $0.rawValue == savedTier }) ? savedTier : ""
+        lastSummaryModelID = UserDefaults.standard.string(forKey: "lastSummaryModelID") ?? ""
+
+        let savedExecutionTarget = ExecutionTarget(rawValue: UserDefaults.standard.string(forKey: "executionTarget") ?? "") ?? .local
+        executionTarget = savedExecutionTarget
+        remoteServiceURL = UserDefaults.standard.string(forKey: "remoteServiceURL") ?? "http://192.168.3.79:8766"
+        remoteTailscaleURL = UserDefaults.standard.string(forKey: "remoteTailscaleURL") ?? ""
+        remoteAvailableEngines = [.vibeVoiceMLX, .funASR, .qwen3ASR]
+        
+        if UserDefaults.standard.object(forKey: "speakerDiarizationEnabled") == nil {
+            speakerDiarizationEnabled = true
+        } else {
+            speakerDiarizationEnabled = UserDefaults.standard.bool(forKey: "speakerDiarizationEnabled")
+        }
+    }
+
+    func updateRemoteAvailableEngines(with rawList: [String]?) {
+        guard let rawList = rawList else { return }
+        let parsed = rawList.compactMap { TranscriptionEngine(rawValue: $0) }
+        if !parsed.isEmpty {
+            self.remoteAvailableEngines = parsed
+            if !parsed.contains(transcriptionEngine) {
+                transcriptionEngine = parsed[0]
+                transcriptionModelID = parsed[0].defaultModelID
+            }
+        }
     }
 
     var allModels: [(id: String, name: String)] {
@@ -166,6 +262,10 @@ class SettingsManager: ObservableObject {
         } else if !selectedModel.isEmpty,
                   !customModels.contains(where: { $0.id == selectedModel }) {
             selectedModel = customModels.first?.id ?? ""
+        }
+        if !lastSummaryModelID.isEmpty,
+           !customModels.contains(where: { $0.id == lastSummaryModelID }) {
+            lastSummaryModelID = customModels.first?.id ?? ""
         }
     }
 
@@ -188,7 +288,10 @@ class SettingsManager: ObservableObject {
     }
 
     func availableTranscriptionEngines() -> [TranscriptionEngine] {
-        TranscriptionEngine.available(for: runtimeEnvironment)
+        if executionTarget == .remote {
+            return remoteAvailableEngines
+        }
+        return TranscriptionEngine.available(for: runtimeEnvironment)
     }
 
     func updateRuntimeEnvironment(_ environment: RuntimeEnvironment) {
@@ -202,9 +305,7 @@ class SettingsManager: ObservableObject {
 
     func updateTranscriptionEngine(_ engine: TranscriptionEngine) {
         transcriptionEngine = engine
-        if transcriptionModelID.isEmpty || transcriptionModelID == transcriptionEngine.defaultModelID {
-            transcriptionModelID = engine.defaultModelID
-        }
+        transcriptionModelID = engine.defaultModelID
     }
 }
 

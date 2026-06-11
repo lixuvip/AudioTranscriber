@@ -19,3 +19,6 @@ venv/
 
 # Claude Code
 .claude/
+.ccb/
+test_qwen.json
+**/xcuserdata/

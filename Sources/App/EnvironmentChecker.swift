@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import Darwin.Mach
 
 struct DependencyStatus: Identifiable {
     let id = UUID()
@@ -74,6 +75,7 @@ class EnvironmentChecker: ObservableObject {
     @Published var pythonSitePackages: String = ""
     @Published var isInstallingDependency = false
     @Published var installMessage: String = ""
+    @Published var installLog: String = ""
     @Published var isChecking = false
     @Published var hasChecked = false
     @Published var checkProgress = "尚未预热环境"
@@ -209,6 +211,9 @@ class EnvironmentChecker: ObservableObject {
         case .vibeVoiceMLX:
             deps.append(checkMLXAudioStatus(pythonPath))
             deps.append(checkMLXModelStatus(pythonPath, modelID: runtimeSelection.modelID))
+        case .qwen3ASR:
+            deps.append(checkMLXQwen3ASRStatus(pythonPath))
+            deps.append(checkQwen3ASRModelsStatus(pythonPath, modelID: runtimeSelection.modelID))
         }
 
         let detection = detectPerformanceProfile(pythonPath: pythonPath, engine: runtimeSelection.engine)
@@ -229,7 +234,8 @@ class EnvironmentChecker: ObservableObject {
         )
     }
 
-    /// 自动探测 FunASR 对应的 Python：扫描所有 python3，逐个测试 import funasr
+    /// 自动探测目标引擎对应的 Python：逐个测试 import，优先返回已装包的。
+    /// 如果全部未装包，则返回版本最高的可用 Python 以便用户安装依赖。
     nonisolated private static func detectPython(customPythonPath: String, engine: TranscriptionEngine) -> (path: String, sitePackages: String) {
         var candidates: [String] = []
 
@@ -241,19 +247,52 @@ class EnvironmentChecker: ObservableObject {
 
         appendUniquePythonCandidates(from: discoverPythonCandidates(), to: &candidates)
 
+        // 去重并过滤掉不可执行的路径
+        var seen = Set<String>()
+        var executableCandidates: [String] = []
         for p in candidates {
+            let trimmed = p.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+            seen.insert(trimmed)
+            guard FileManager.default.isExecutableFile(atPath: trimmed) else { continue }
+            executableCandidates.append(trimmed)
+        }
+
+        // 第一轮：找已装目标包的 Python
+        for p in executableCandidates {
             let isUsable: Bool
             switch engine {
             case .funASR:
                 isUsable = pythonCanImportFunASR(p)
             case .vibeVoiceMLX:
                 isUsable = pythonCanImportMLXAudio(p)
+            case .qwen3ASR:
+                isUsable = pythonCanImportMLXQwen3ASR(p)
             }
             guard isUsable else { continue }
             return (p, sitePackagesPath(for: p))
         }
 
-        return (candidates.first ?? "python3", "")
+        // 第二轮：全部未装包 → 选版本最高的，确保用户安装依赖时用最好的 Python
+        var bestPath = executableCandidates.first ?? "/usr/bin/python3"
+        var bestVersion = (0, 0)
+        for p in executableCandidates {
+            let ver = pythonVersion(p)
+            if ver > bestVersion {
+                bestVersion = ver
+                bestPath = p
+            }
+        }
+        return (bestPath, sitePackagesPath(for: bestPath))
+    }
+
+    nonisolated private static func pythonVersion(_ python: String) -> (Int, Int) {
+        let output = runPython(python, code: "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')", cleanPythonEnvironment: true)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = output.components(separatedBy: ".")
+        let major = Int(parts.first ?? "0") ?? 0
+        let minor = parts.count >= 2 ? (Int(parts[1]) ?? 0) : 0
+        return (major, minor)
     }
 
     nonisolated private static func discoverPythonCandidates() -> [String] {
@@ -291,9 +330,17 @@ class EnvironmentChecker: ObservableObject {
     nonisolated private static func pythonCanImportMLXAudio(_ python: String) -> Bool {
         runPython(
             python,
-            code: "import importlib.util; print('MLXOK' if importlib.util.find_spec('mlx_audio') else '')",
+            code: "import sys, importlib.util; print('MLXOK' if sys.version_info >= (3, 10) and importlib.util.find_spec('mlx_audio') else '')",
             cleanPythonEnvironment: true
         ).contains("MLXOK")
+    }
+
+    nonisolated private static func pythonCanImportMLXQwen3ASR(_ python: String) -> Bool {
+        runPython(
+            python,
+            code: "import sys, importlib.util; print('QWENOK' if sys.version_info >= (3, 10) and importlib.util.find_spec('mlx_qwen3_asr') else '')",
+            cleanPythonEnvironment: true
+        ).contains("QWENOK")
     }
 
     nonisolated private static func appManagedPythonPath() -> String {
@@ -355,41 +402,63 @@ class EnvironmentChecker: ObservableObject {
     }
 
     nonisolated private static func checkFFmpegStatus() -> DependencyStatus {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        task.arguments = ["ffmpeg"]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = pipe
-        do {
-            try task.run()
-            task.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
+        let commonPaths = [
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+            "/bin/ffmpeg"
+        ]
+        
+        var ffmpegPath = ""
+        for path in commonPaths {
+            if FileManager.default.fileExists(atPath: path) && FileManager.default.isExecutableFile(atPath: path) {
+                ffmpegPath = path
+                break
+            }
+        }
+        
+        if ffmpegPath.isEmpty {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+            task.arguments = ["ffmpeg"]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                ffmpegPath = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            } catch {}
+        }
+        
+        if !ffmpegPath.isEmpty {
             let verTask = Process()
             verTask.executableURL = URL(fileURLWithPath: "/bin/bash")
-            verTask.arguments = ["-c", "\(path.isEmpty ? "ffmpeg" : path) -version 2>&1 | head -1"]
+            verTask.arguments = ["-c", "\(ffmpegPath) -version 2>&1 | head -1"]
             let verPipe = Pipe()
             verTask.standardOutput = verPipe
             verTask.standardError = verPipe
-            try verTask.run()
-            verTask.waitUntilExit()
-            let verData = verPipe.fileHandleForReading.readDataToEndOfFile()
-            let ver = String(data: verData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-            return DependencyStatus(
-                name: "ffmpeg", icon: "play.rectangle.fill",
-                isReady: task.terminationStatus == 0,
-                message: task.terminationStatus == 0 ? "✓ \(ver)" : "✗ 未找到"
-            )
-        } catch {
-            return DependencyStatus(
-                name: "ffmpeg", icon: "play.rectangle.fill",
-                isReady: false, message: "✗ 未找到"
-            )
+            do {
+                try verTask.run()
+                verTask.waitUntilExit()
+                let verData = verPipe.fileHandleForReading.readDataToEndOfFile()
+                let ver = String(data: verData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return DependencyStatus(
+                    name: "ffmpeg", icon: "play.rectangle.fill",
+                    isReady: true,
+                    message: "✓ \(ver)"
+                )
+            } catch {}
         }
+        
+        return DependencyStatus(
+            name: "ffmpeg", icon: "play.rectangle.fill",
+            isReady: false,
+            message: "✗ 未找到"
+        )
     }
+
 
     nonisolated private static func checkPythonStatus(_ python: String) -> DependencyStatus {
         let task = Process()
@@ -575,6 +644,48 @@ class EnvironmentChecker: ObservableObject {
         )
     }
 
+    nonisolated private static func checkMLXQwen3ASRStatus(_ python: String) -> DependencyStatus {
+        let code = """
+        import importlib.util
+        spec = importlib.util.find_spec('mlx_qwen3_asr')
+        print('OK' if spec is not None else '')
+        """
+        let output = runPython(python, code: code, cleanPythonEnvironment: true)
+        return DependencyStatus(
+            name: "mlx-qwen3-asr", icon: "cpu",
+            isReady: output.contains("OK"),
+            message: output.contains("OK") ? "✓ MLX Qwen3-ASR 已安装" : "✗ 此 Python 未安装 mlx_qwen3_asr"
+        )
+    }
+
+    nonisolated private static func checkQwen3ASRModelsStatus(_ python: String, modelID: String) -> DependencyStatus {
+        let hasMLXQwen3 = pythonCanImportMLXQwen3ASR(python)
+        guard hasMLXQwen3 else {
+            return DependencyStatus(
+                name: "qwen3-model", icon: "cube.box.fill",
+                isReady: false,
+                message: "✗ 请先安装 mlx_qwen3_asr 依赖"
+            )
+        }
+        let sanitizedModelID = modelID.replacingOccurrences(of: "'", with: "")
+        let code = """
+        import os
+        from huggingface_hub import snapshot_download
+        try:
+            path = snapshot_download(repo_id='\(sanitizedModelID)', local_files_only=True)
+            print(path)
+        except Exception:
+            print('')
+        """
+        let output = runPython(python, code: code, cleanPythonEnvironment: true)
+        let isReady = !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return DependencyStatus(
+            name: "qwen3-model", icon: "cube.box.fill",
+            isReady: isReady,
+            message: isReady ? "✓ Qwen3 模型已缓存" : "✗ 未检测到 \(modelID)"
+        )
+    }
+
     nonisolated private static func detectPerformanceProfile(pythonPath: String, engine: TranscriptionEngine) -> PerformanceProfile {
         let totalCores = intFromShell("sysctl -n hw.ncpu 2>/dev/null", fallback: ProcessInfo.processInfo.processorCount)
         let performanceCores = intFromShell("sysctl -n hw.perflevel0.physicalcpu 2>/dev/null", fallback: max(1, totalCores - 2))
@@ -604,15 +715,16 @@ class EnvironmentChecker: ObservableObject {
             batchSizeSeconds = 60
         }
 
-        let device = engine == .vibeVoiceMLX ? "mlx" : "cpu"
+        let isMLXEngine = engine == .vibeVoiceMLX || engine == .qwen3ASR
+        let device = isMLXEngine ? "mlx" : "cpu"
         let chipText = cpuBrand.isEmpty ? "\(totalCores) 核 CPU" : cpuBrand
         let accelerationHint: String
-        if engine == .vibeVoiceMLX {
+        if isMLXEngine {
             accelerationHint = "，优先使用 Apple Silicon MLX"
         } else {
             accelerationHint = mpsAvailable ? "，检测到 MPS 可用但暂不默认启用" : ""
         }
-        let summary = "自动性能：\(threads) 线程，batch \(batchSizeSeconds)s，\(engine == .vibeVoiceMLX ? "MLX 模式" : "CPU 稳定模式")\(accelerationHint)（\(chipText)，\(memoryGB)GB）"
+        let summary = "自动性能：\(threads) 线程，batch \(batchSizeSeconds)s，\(isMLXEngine ? "MLX 模式" : "CPU 稳定模式")\(accelerationHint)（\(chipText)，\(memoryGB)GB）"
 
         return PerformanceProfile(
             device: device,
@@ -631,7 +743,7 @@ class EnvironmentChecker: ObservableObject {
         let threads = profile.threads
 
         switch engine {
-        case .vibeVoiceMLX:
+        case .vibeVoiceMLX, .qwen3ASR:
             if memoryGB >= 32 && threads >= 4 {
                 return .high
             } else if memoryGB >= 16 {
@@ -651,7 +763,8 @@ class EnvironmentChecker: ObservableObject {
     }
 
     nonisolated private static func recommendationDetail(from profile: PerformanceProfile, recommendedTier: PerformanceTier, engine: TranscriptionEngine) -> String {
-        let mode = engine == .vibeVoiceMLX ? "MLX" : "CPU"
+        let isMLX = engine == .vibeVoiceMLX || engine == .qwen3ASR
+        let mode = isMLX ? "MLX" : "CPU"
         return "检测结果：\(profile.summary)。当前建议采用\(recommendedTier.title)档（\(mode)）。"
     }
 
@@ -670,8 +783,9 @@ class EnvironmentChecker: ObservableObject {
             baseBatch = engine == .vibeVoiceMLX ? 90 : 90
             mergeLength = 12
         case .high:
-            baseThreads = max(detected.threads, engine == .vibeVoiceMLX ? 4 : 2)
-            baseBatch = engine == .vibeVoiceMLX ? 120 : 120
+            let isMLX = engine == .vibeVoiceMLX || engine == .qwen3ASR
+            baseThreads = max(detected.threads, isMLX ? 4 : 2)
+            baseBatch = isMLX ? 120 : 120
             mergeLength = 15
         }
 
@@ -699,6 +813,87 @@ class EnvironmentChecker: ObservableObject {
         return runPython(pythonPath, code: code, cleanPythonEnvironment: true).contains("YES")
     }
 
+    // MARK: - 内存预检
+
+    struct MemoryPrecheck {
+        let availableGB: Double
+        let totalGB: Int
+        let requiredGB: Double
+        let isSafe: Bool
+        let recommendation: MemoryRecommendation
+    }
+
+    enum MemoryRecommendation {
+        case proceed
+        case downgrade(suggestedTier: PerformanceTier, reason: String)
+        case warn(reason: String)
+    }
+
+    nonisolated static func checkAvailableMemory(engine: TranscriptionEngine, currentTier: PerformanceTier) -> MemoryPrecheck {
+        let pageSize = Int64(vm_page_size)
+        var vmStats = vm_statistics64()
+        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &vmStats) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+            }
+        }
+
+        let totalBytes = int64FromShell("sysctl -n hw.memsize 2>/dev/null", fallback: Int64(ProcessInfo.processInfo.physicalMemory))
+        let totalGB = max(1, Int(totalBytes / 1_073_741_824))
+
+        var availableGB: Double = Double(totalGB) * 0.5
+        if result == KERN_SUCCESS {
+            let freePages = Int64(vmStats.free_count) + Int64(vmStats.inactive_count) + Int64(vmStats.purgeable_count)
+            let availableBytes = freePages * pageSize
+            availableGB = Double(availableBytes) / 1_073_741_824.0
+        }
+
+        let requiredGB: Double
+        switch engine {
+        case .funASR:
+            switch currentTier {
+            case .high: requiredGB = 6.0
+            case .medium: requiredGB = 4.0
+            case .low: requiredGB = 2.5
+            }
+        case .vibeVoiceMLX:
+            switch currentTier {
+            case .high: requiredGB = 10.0
+            case .medium: requiredGB = 6.0
+            case .low: requiredGB = 4.0
+            }
+        case .qwen3ASR:
+            switch currentTier {
+            case .high: requiredGB = 8.0
+            case .medium: requiredGB = 4.0
+            case .low: requiredGB = 2.5
+            }
+        }
+
+        let isSafe = availableGB >= requiredGB
+        let recommendation: MemoryRecommendation
+
+        if isSafe {
+            recommendation = .proceed
+        } else if availableGB >= requiredGB * 0.6 {
+            let suggestedTier: PerformanceTier = currentTier == .high ? .medium : .low
+            let reason = String(format: "可用内存 %.1fGB，当前档位建议 %.1fGB。已自动降至\(suggestedTier.title)档以避免卡顿。", availableGB, requiredGB)
+            recommendation = .downgrade(suggestedTier: suggestedTier, reason: reason)
+        } else {
+            let reason = String(format: "可用内存仅 %.1fGB，建议至少 %.1fGB。转写可能导致系统卡顿或进程被终止。", availableGB, requiredGB)
+            recommendation = .warn(reason: reason)
+        }
+
+        return MemoryPrecheck(
+            availableGB: availableGB,
+            totalGB: totalGB,
+            requiredGB: requiredGB,
+            isSafe: isSafe,
+            recommendation: recommendation
+        )
+    }
+
     nonisolated private static func intFromShell(_ command: String, fallback: Int) -> Int {
         let value = runShell(command).trimmingCharacters(in: .whitespacesAndNewlines)
         return Int(value) ?? fallback
@@ -719,7 +914,7 @@ class EnvironmentChecker: ObservableObject {
         }
     }
 
-    func installPythonDependencies() {
+    func installPythonDependencies(autoRefresh: Bool = false) {
         let python = pythonPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !python.isEmpty, FileManager.default.isExecutableFile(atPath: python) else {
             installMessage = "请先选择有效的 Python 可执行文件。"
@@ -729,28 +924,36 @@ class EnvironmentChecker: ObservableObject {
         let managedPython = Self.appManagedPythonPath()
         let managedVenv = (managedPython as NSString).deletingLastPathComponent
         let managedVenvRoot = (managedVenv as NSString).deletingLastPathComponent
-        let command: String
+        let pkgs: String
         switch runtimeSelection.engine {
-        case .funASR:
-            command = """
-            mkdir -p "\(managedVenvRoot)" && \
-            "\(python)" -m venv "\(managedVenvRoot)" && \
-            "\(managedPython)" -m pip install -U pip setuptools wheel && \
-            "\(managedPython)" -m pip install -U funasr modelscope openai
-            """
-        case .vibeVoiceMLX:
-            command = """
-            mkdir -p "\(managedVenvRoot)" && \
-            "\(python)" -m venv "\(managedVenvRoot)" && \
-            "\(managedPython)" -m pip install -U pip setuptools wheel && \
-            "\(managedPython)" -m pip install -U mlx-audio huggingface_hub openai
-            """
+        case .funASR:       pkgs = "funasr modelscope openai"
+        case .vibeVoiceMLX: pkgs = "mlx-audio huggingface_hub openai"
+        case .qwen3ASR:     pkgs = "\"mlx-qwen3-asr[diarize]\" huggingface_hub openai"
         }
-        openTerminal(command: command)
-        installMessage = "已打开 Terminal，为 \(runtimeSelection.engine.title) 创建独立环境并安装依赖。"
+
+        let script = """
+        rm -rf "\(managedVenvRoot)" && \
+        "\(python)" -m venv "\(managedVenvRoot)" && \
+        "\(managedPython)" -m pip install -U pip setuptools wheel -q && \
+        "\(managedPython)" -m pip install -U \(pkgs)
+        """
+
+        isInstallingDependency = true
+        installLog = ""
+        installMessage = "正在安装 \(runtimeSelection.engine.title) 依赖..."
+        Task.detached(priority: .userInitiated) {
+            let result = await Self.streamShell(script: script, updateLog: { line in
+                await MainActor.run { self.installLog += line + "\n" }
+            })
+            await MainActor.run {
+                self.isInstallingDependency = false
+                self.installMessage = result
+                if autoRefresh { self.check() }
+            }
+        }
     }
 
-    func installModels() {
+    func installModels(autoRefresh: Bool = false) {
         let managedPython = Self.appManagedPythonPath()
         let fallbackPython = pythonPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let python = FileManager.default.isExecutableFile(atPath: managedPython) ? managedPython : fallbackPython
@@ -759,17 +962,72 @@ class EnvironmentChecker: ObservableObject {
             return
         }
 
-        let command: String
+        let script: String
         switch runtimeSelection.engine {
         case .funASR:
-            let code = "from funasr import AutoModel; AutoModel(model='paraformer-zh', vad_model='fsmn-vad', punc_model='ct-punc', spk_model='cam++', device='cpu', disable_update=True)"
-            command = "\"\(python)\" -c \"\(code)\""
-        case .vibeVoiceMLX:
+            script = "\"\(python)\" -c \"from funasr import AutoModel; AutoModel(model='paraformer-zh', vad_model='fsmn-vad', punc_model='ct-punc', spk_model='cam++', device='cpu', disable_update=True)\""
+        case .vibeVoiceMLX, .qwen3ASR:
             let repo = runtimeSelection.modelID.replacingOccurrences(of: "\"", with: "")
-            command = "\"\(python)\" -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='\(repo)')\""
+            script = "\"\(python)\" -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='\(repo)')\""
         }
-        openTerminal(command: command)
-        installMessage = "已打开 Terminal 下载 \(runtimeSelection.engine.title) 模型。"
+
+        isInstallingDependency = true
+        installLog = ""
+        installMessage = "正在下载 \(runtimeSelection.engine.title) 模型..."
+        Task.detached(priority: .userInitiated) {
+            let result = await Self.streamShell(script: script, updateLog: { line in
+                await MainActor.run { self.installLog += line + "\n" }
+            })
+            await MainActor.run {
+                self.isInstallingDependency = false
+                self.installMessage = result
+                if autoRefresh { self.check() }
+            }
+        }
+    }
+
+    nonisolated private static func streamShell(script: String, updateLog: @escaping (String) async -> Void) async -> String {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/bash")
+        task.arguments = ["-c", script]
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        task.standardOutput = outPipe
+        task.standardError = errPipe
+
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
+            for line in str.components(separatedBy: "\n") where !line.isEmpty {
+                Task { await updateLog(line) }
+            }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
+            for line in str.components(separatedBy: "\n") where !line.isEmpty {
+                Task { await updateLog("[err] \(line)") }
+            }
+        }
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+
+            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+            if let str = String(data: outData, encoding: .utf8) {
+                for line in str.components(separatedBy: "\n") where !line.isEmpty {
+                    await updateLog(line)
+                }
+            }
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
+
+            return task.terminationStatus == 0 ? "安装完成" : "安装退出码: \(task.terminationStatus)"
+        } catch {
+            return "执行失败: \(error.localizedDescription)"
+        }
     }
 
     private func isBrewInstalled() -> Bool {
@@ -802,6 +1060,8 @@ class EnvironmentChecker: ObservableObject {
             return ["ffmpeg", "python3", "funasr", "models"]
         case .vibeVoiceMLX:
             return ["ffmpeg", "python3", "mlx-audio", "mlx-model"]
+        case .qwen3ASR:
+            return ["ffmpeg", "python3", "mlx-qwen3-asr", "qwen3-model"]
         }
     }
 }

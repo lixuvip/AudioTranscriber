@@ -11,6 +11,7 @@ struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable {
     let duration: TimeInterval?
     let segmentCount: Int
     let speakerCount: Int
+    let audioPath: String?
 
     var dateString: String {
         let f = DateFormatter()

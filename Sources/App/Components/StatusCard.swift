@@ -78,33 +78,70 @@ struct StatusCard: View {
                         .font(.system(size: 11))
                         .foregroundColor(Color(hex: "A0A0B0"))
 
-                    HStack(spacing: 10) {
-                        if isMissingFFmpeg {
-                            Button("第 1 步：安装 ffmpeg") {
-                                envChecker.installFFmpeg()
-                            }
-                            .buttonStyle(.borderedProminent)
+                    if envChecker.isInstallingDependency {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .frame(width: 16, height: 16)
+                            Text(envChecker.installMessage)
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(hex: "A0A0B0"))
                         }
-                        if isMissingPythonDeps {
-                            Button(installDependenciesStepTitle) {
-                                envChecker.installPythonDependencies()
-                            }
-                            .buttonStyle(.borderedProminent)
+                    }
+                    // Keep log visible after install completes so user can review
+                    if !envChecker.installLog.isEmpty {
+                        ScrollView {
+                            Text(envChecker.installLog)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Color(hex: "4EC9B0"))
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        if isMissingModels {
-                            Button(downloadModelStepTitle) {
-                                envChecker.installModels()
+                        .frame(maxHeight: 200)
+                        .padding(8)
+                        .background(Color(hex: "0D0D15"))
+                        .cornerRadius(6)
+                        HStack {
+                            Spacer()
+                            Button("清除日志") {
+                                envChecker.installLog = ""
+                                envChecker.installMessage = ""
                             }
                             .buttonStyle(.bordered)
-                            .disabled(!canDownloadModelYet)
+                            .controlSize(.small)
                         }
-                        Button("完成后重新预热") {
-                            envChecker.refreshAfterExternalInstall()
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(envChecker.isChecking)
                     }
-                    if !envChecker.installMessage.isEmpty {
+
+                    if !envChecker.isInstallingDependency {
+                        HStack(spacing: 10) {
+                            if isMissingFFmpeg {
+                                Button("安装 ffmpeg") {
+                                    envChecker.installFFmpeg()
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            if isMissingPythonDeps {
+                                Button(installDependenciesStepTitle) {
+                                    envChecker.installPythonDependencies()
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            if isMissingModels {
+                                Button(downloadModelStepTitle) {
+                                    envChecker.installModels()
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(!canDownloadModelYet)
+                            }
+                            Button("重新检测") {
+                                envChecker.installLog = ""
+                                envChecker.installMessage = ""
+                                envChecker.refreshAfterExternalInstall()
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(envChecker.isChecking)
+                        }
+                    }
+                    if !envChecker.installMessage.isEmpty && envChecker.installLog.isEmpty {
                         Text(envChecker.installMessage)
                             .font(.system(size: 11))
                             .foregroundColor(Color(hex: "A0A0B0"))
@@ -141,6 +178,8 @@ struct StatusCard: View {
             return ["ffmpeg", "python3", "funasr", "models"]
         case .vibeVoiceMLX:
             return ["ffmpeg", "python3", "mlx-audio", "mlx-model"]
+        case .qwen3ASR:
+            return ["ffmpeg", "python3", "mlx-qwen3-asr", "qwen3-model"]
         }
     }
 
@@ -150,6 +189,8 @@ struct StatusCard: View {
             return ["python3", "funasr"]
         case .vibeVoiceMLX:
             return ["python3", "mlx-audio"]
+        case .qwen3ASR:
+            return ["python3", "mlx-qwen3-asr"]
         }
     }
 
@@ -159,6 +200,8 @@ struct StatusCard: View {
             return ["models"]
         case .vibeVoiceMLX:
             return ["mlx-model"]
+        case .qwen3ASR:
+            return ["qwen3-model"]
         }
     }
 
@@ -168,6 +211,8 @@ struct StatusCard: View {
             return "安装 FunASR 依赖"
         case .vibeVoiceMLX:
             return "安装 MLX 依赖"
+        case .qwen3ASR:
+            return "安装 Qwen3-ASR 依赖"
         }
     }
 
@@ -177,6 +222,8 @@ struct StatusCard: View {
             return "下载模型"
         case .vibeVoiceMLX:
             return "下载 MLX 模型"
+        case .qwen3ASR:
+            return "下载 Qwen3 模型"
         }
     }
 
@@ -186,6 +233,8 @@ struct StatusCard: View {
             return "第 1 步：安装 FunASR 依赖"
         case .vibeVoiceMLX:
             return "第 1 步：安装 MLX 依赖"
+        case .qwen3ASR:
+            return "第 1 步：安装 Qwen3-ASR 依赖"
         }
     }
 
@@ -195,6 +244,8 @@ struct StatusCard: View {
             return "第 2 步：下载模型"
         case .vibeVoiceMLX:
             return "第 2 步：下载 MLX 模型"
+        case .qwen3ASR:
+            return "第 2 步：下载 Qwen3 模型"
         }
     }
 
@@ -204,12 +255,14 @@ struct StatusCard: View {
             return true
         case .vibeVoiceMLX:
             return !isMissingPythonDeps
+        case .qwen3ASR:
+            return !isMissingPythonDeps
         }
     }
 
     private var missingRequirementsTitle: String {
-        if envChecker.runtimeSelection.engine == .vibeVoiceMLX && isMissingPythonDeps {
-            return "请按顺序完成：先安装 MLX 依赖，再下载 MLX 模型。"
+        if (envChecker.runtimeSelection.engine == .vibeVoiceMLX || envChecker.runtimeSelection.engine == .qwen3ASR) && isMissingPythonDeps {
+            return "请按顺序完成：先安装 MLX 依赖，再下载模型。"
         }
         return "检测到 \(envChecker.runtimeSelection.engine.title) 缺失项，可直接安装。"
     }

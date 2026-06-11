@@ -3,6 +3,8 @@ import AppKit
 
 struct HistoryView: View {
     @ObservedObject var historyManager: HistoryManager
+    @ObservedObject var transcriber: Transcriber
+    @Binding var activeTab: ContentView.MainTab
     @State private var searchText = ""
     @State private var expandedID: String?
 
@@ -64,7 +66,11 @@ struct HistoryView: View {
                                     }
                                 },
                                 onOpenDir: { openOutputDir(entry) },
-                                onDelete: { historyManager.remove(id: entry.id) }
+                                onDelete: { historyManager.remove(id: entry.id) },
+                                onLoadProofread: {
+                                    transcriber.loadHistoryEntry(entry)
+                                    activeTab = .editor
+                                }
                             )
                         }
                     }
@@ -102,6 +108,7 @@ private struct HistoryRow: View {
     var onToggle: () -> Void
     var onOpenDir: () -> Void
     var onDelete: () -> Void
+    var onLoadProofread: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -181,6 +188,17 @@ private struct HistoryRow: View {
 
                     // 操作按钮
                     HStack(spacing: 8) {
+                        Button(action: onLoadProofread) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .font(.system(size: 10))
+                                Text("加载校对")
+                                    .font(.system(size: 11))
+                            }
+                            .foregroundColor(Color(hex: "4EC9B0"))
+                        }
+                        .buttonStyle(.plain)
+
                         Button(action: onOpenDir) {
                             HStack(spacing: 4) {
                                 Image(systemName: "folder")

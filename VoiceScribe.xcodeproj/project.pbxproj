@@ -8,35 +8,54 @@
 
 /* Begin PBXBuildFile section */
 		13EA8F9F1B963BBC879AD26B /* AudioTranscriberApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51D364097A49D705553868E /* AudioTranscriberApp.swift */; };
+		178DC2918C57A4315BC9A0EB /* WaveformVisualizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E52BCF645A5CE24FDBBC034 /* WaveformVisualizer.swift */; };
+		19F143D100B06E6DD827B0C2 /* RemoteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 550073F75712C4788C1D1D1A /* RemoteModels.swift */; };
 		1B13938ECB09D0D256B2FC74 /* Transcriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03DEA15EE20766357A9838D2 /* Transcriber.swift */; };
 		20D1C325F3926F6C415D60AB /* ButtonStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004A8654D65D67F201E86B5C /* ButtonStyles.swift */; };
 		328FC216C42013ECB30D42C6 /* SettingsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E0CE40A95BF596293606D7E /* SettingsPanel.swift */; };
 		35ECE4630B5DB53D22640C70 /* transcribe.py in Resources */ = {isa = PBXBuildFile; fileRef = F47C961537E47C956498D347 /* transcribe.py */; };
 		3C351047D8CFCFAB14E18DC2 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 190678458E7008DF86D4F857 /* HistoryView.swift */; };
+		3E5214C53D859153FD17459A /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5046F921D30C16323BA71FF8 /* KeychainStore.swift */; };
 		41249F96CE0F6C7FDACCE57F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77C0345B374CA2D73C2E4E1E /* ContentView.swift */; };
 		471B8DD0CD9B0DD0F88B8CAA /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030F23089880347CA781E740 /* SettingsManager.swift */; };
 		4D5DBC44515DB9A74E833566 /* TranscriptionHistoryEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB278065885CEB6DD0C3EB6 /* TranscriptionHistoryEntry.swift */; };
 		4E6E160967FBD3F11A1481E3 /* StatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D50E523140C54843C5E7975 /* StatusCard.swift */; };
+		57B344624C14C625588CB522 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 808D1BCA3CFA5C38A366A803 /* Assets.xcassets */; };
+		5EDAAEDCC346CBDD4B65F96F /* AIInsightsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77EA38F6F6CBEBC74AD18DB1 /* AIInsightsPanel.swift */; };
+		6344E06CA0FE97BA2ECBC403 /* RemoteTranscriberClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB0362D2F8A910FEC4B8EB /* RemoteTranscriberClient.swift */; };
 		6ADE8F926704E3051B792822 /* EnvironmentChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FDD769759AC1D8CF81BC6D6 /* EnvironmentChecker.swift */; };
 		6CF93DFAC58E1BBAF7C9B3FA /* LogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3704CBDF2E5B8E5F20E3EBA /* LogView.swift */; };
+		6E45602B50CA2E9E90CDE200 /* TranscriptionTimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7689158B1B4B7D7D6FBB8F7C /* TranscriptionTimelineView.swift */; };
 		79B08BDD0B064A23E49AD5A0 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6944397C5341121225AEE0A /* Color+Hex.swift */; };
+		901F82BCB1B006A92A029008 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FAA0DB43F9603FF23C341D2 /* SidebarView.swift */; };
 		A8EF6E036E392BF1B1D238EF /* FolderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 665FE5B0C9E57FC0B4EF000F /* FolderPicker.swift */; };
 		B76AA00391FB6F0EFDC2245A /* FileDropZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37F86800A30E6326FEB374C /* FileDropZone.swift */; };
 		D9691A1AA1C51E7B29DF22C9 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C955ECCD1DFAB967359B5973 /* SetupView.swift */; };
 		F08F57D4736AD2E2E59E200F /* FolderPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E24E8CD5250B4691EB33CEC /* FolderPickerSheet.swift */; };
 		FDB9B11A12CC4D299CE5224A /* summarize.py in Resources */ = {isa = PBXBuildFile; fileRef = 9D1F11429FCD24BEAEAEFEFF /* summarize.py */; };
+		FF9C2E1CE2C821210C0E8620 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 4EEB4566CCFF1C22B0C4F557 /* AppIcon.icns */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		004A8654D65D67F201E86B5C /* ButtonStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ButtonStyles.swift; sourceTree = "<group>"; };
 		030F23089880347CA781E740 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		03DEA15EE20766357A9838D2 /* Transcriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transcriber.swift; sourceTree = "<group>"; };
+		0FAA0DB43F9603FF23C341D2 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		190678458E7008DF86D4F857 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		2D50E523140C54843C5E7975 /* StatusCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusCard.swift; sourceTree = "<group>"; };
+		2EDB0362D2F8A910FEC4B8EB /* RemoteTranscriberClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTranscriberClient.swift; sourceTree = "<group>"; };
 		3FDD769759AC1D8CF81BC6D6 /* EnvironmentChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentChecker.swift; sourceTree = "<group>"; };
+		4EEB4566CCFF1C22B0C4F557 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		5046F921D30C16323BA71FF8 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		550073F75712C4788C1D1D1A /* RemoteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteModels.swift; sourceTree = "<group>"; };
+		646B0B0ABBEFC7DF63462DDB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		665FE5B0C9E57FC0B4EF000F /* FolderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderPicker.swift; sourceTree = "<group>"; };
 		6CB278065885CEB6DD0C3EB6 /* TranscriptionHistoryEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionHistoryEntry.swift; sourceTree = "<group>"; };
+		7689158B1B4B7D7D6FBB8F7C /* TranscriptionTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionTimelineView.swift; sourceTree = "<group>"; };
 		77C0345B374CA2D73C2E4E1E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		77EA38F6F6CBEBC74AD18DB1 /* AIInsightsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIInsightsPanel.swift; sourceTree = "<group>"; };
+		7E52BCF645A5CE24FDBBC034 /* WaveformVisualizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformVisualizer.swift; sourceTree = "<group>"; };
+		808D1BCA3CFA5C38A366A803 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8E0CE40A95BF596293606D7E /* SettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPanel.swift; sourceTree = "<group>"; };
 		8E24E8CD5250B4691EB33CEC /* FolderPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderPickerSheet.swift; sourceTree = "<group>"; };
 		9D1F11429FCD24BEAEAEFEFF /* summarize.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = summarize.py; sourceTree = "<group>"; };
@@ -50,6 +69,16 @@
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		0119A82675D27348E4938D0D /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				4EEB4566CCFF1C22B0C4F557 /* AppIcon.icns */,
+				808D1BCA3CFA5C38A366A803 /* Assets.xcassets */,
+				646B0B0ABBEFC7DF63462DDB /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		10077823B26138187030CF3D /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -78,13 +107,17 @@
 		A27B2E9DE44F80516145703C /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				77EA38F6F6CBEBC74AD18DB1 /* AIInsightsPanel.swift */,
 				004A8654D65D67F201E86B5C /* ButtonStyles.swift */,
 				B37F86800A30E6326FEB374C /* FileDropZone.swift */,
 				665FE5B0C9E57FC0B4EF000F /* FolderPicker.swift */,
 				8E24E8CD5250B4691EB33CEC /* FolderPickerSheet.swift */,
 				F3704CBDF2E5B8E5F20E3EBA /* LogView.swift */,
 				8E0CE40A95BF596293606D7E /* SettingsPanel.swift */,
+				0FAA0DB43F9603FF23C341D2 /* SidebarView.swift */,
 				2D50E523140C54843C5E7975 /* StatusCard.swift */,
+				7689158B1B4B7D7D6FBB8F7C /* TranscriptionTimelineView.swift */,
+				7E52BCF645A5CE24FDBBC034 /* WaveformVisualizer.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -97,6 +130,9 @@
 				77C0345B374CA2D73C2E4E1E /* ContentView.swift */,
 				3FDD769759AC1D8CF81BC6D6 /* EnvironmentChecker.swift */,
 				190678458E7008DF86D4F857 /* HistoryView.swift */,
+				5046F921D30C16323BA71FF8 /* KeychainStore.swift */,
+				550073F75712C4788C1D1D1A /* RemoteModels.swift */,
+				2EDB0362D2F8A910FEC4B8EB /* RemoteTranscriberClient.swift */,
 				030F23089880347CA781E740 /* SettingsManager.swift */,
 				C955ECCD1DFAB967359B5973 /* SetupView.swift */,
 				03DEA15EE20766357A9838D2 /* Transcriber.swift */,
@@ -109,6 +145,7 @@
 		FD01E48D0447D9694AECAB92 = {
 			isa = PBXGroup;
 			children = (
+				0119A82675D27348E4938D0D /* Resources */,
 				282DC9EA8CD6EA3D23E5027B /* Scripts */,
 				10077823B26138187030CF3D /* Sources */,
 				1117211D31AD38584A9B3A8E /* Products */,
@@ -175,6 +212,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FF9C2E1CE2C821210C0E8620 /* AppIcon.icns in Resources */,
+				57B344624C14C625588CB522 /* Assets.xcassets in Resources */,
 				FDB9B11A12CC4D299CE5224A /* summarize.py in Resources */,
 				35ECE4630B5DB53D22640C70 /* transcribe.py in Resources */,
 			);
@@ -187,6 +226,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5EDAAEDCC346CBDD4B65F96F /* AIInsightsPanel.swift in Sources */,
 				13EA8F9F1B963BBC879AD26B /* AudioTranscriberApp.swift in Sources */,
 				20D1C325F3926F6C415D60AB /* ButtonStyles.swift in Sources */,
 				79B08BDD0B064A23E49AD5A0 /* Color+Hex.swift in Sources */,
@@ -196,13 +236,19 @@
 				A8EF6E036E392BF1B1D238EF /* FolderPicker.swift in Sources */,
 				F08F57D4736AD2E2E59E200F /* FolderPickerSheet.swift in Sources */,
 				3C351047D8CFCFAB14E18DC2 /* HistoryView.swift in Sources */,
+				3E5214C53D859153FD17459A /* KeychainStore.swift in Sources */,
 				6CF93DFAC58E1BBAF7C9B3FA /* LogView.swift in Sources */,
+				19F143D100B06E6DD827B0C2 /* RemoteModels.swift in Sources */,
+				6344E06CA0FE97BA2ECBC403 /* RemoteTranscriberClient.swift in Sources */,
 				471B8DD0CD9B0DD0F88B8CAA /* SettingsManager.swift in Sources */,
 				328FC216C42013ECB30D42C6 /* SettingsPanel.swift in Sources */,
 				D9691A1AA1C51E7B29DF22C9 /* SetupView.swift in Sources */,
+				901F82BCB1B006A92A029008 /* SidebarView.swift in Sources */,
 				4E6E160967FBD3F11A1481E3 /* StatusCard.swift in Sources */,
 				1B13938ECB09D0D256B2FC74 /* Transcriber.swift in Sources */,
 				4D5DBC44515DB9A74E833566 /* TranscriptionHistoryEntry.swift in Sources */,
+				6E45602B50CA2E9E90CDE200 /* TranscriptionTimelineView.swift in Sources */,
+				178DC2918C57A4315BC9A0EB /* WaveformVisualizer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -27,7 +27,6 @@ targets:
         excludes:
           - "**/.DS_Store"
           - "**/__pycache__"
-    resources:
       - path: Resources
         excludes:
           - "**/.DS_Store"
