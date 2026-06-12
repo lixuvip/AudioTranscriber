@@ -33,6 +33,7 @@ struct ContentView: View {
         case workspace
         case batchQueue
         case editor
+        case voiceprints
         case history
         case settings
     }
@@ -69,6 +70,9 @@ struct ContentView: View {
                                     .transition(.opacity)
                             case .editor:
                                 editorTab
+                                    .transition(.opacity)
+                            case .voiceprints:
+                                voiceprintTab
                                     .transition(.opacity)
                             case .history:
                                 HistoryView(historyManager: historyManager, transcriber: transcriber, activeTab: $activeTab)
@@ -244,6 +248,7 @@ struct ContentView: View {
         case .workspace: return "工作台"
         case .batchQueue: return "批量处理队列"
         case .editor: return "交互校对编辑器"
+        case .voiceprints: return "声纹库"
         case .history: return "转写历史库"
         case .settings: return "系统环境设置"
         }
@@ -823,7 +828,14 @@ struct ContentView: View {
                 .padding(18)
                 .background(Color(hex: "1E1E2E").opacity(0.6))
                 .cornerRadius(12)
+            }
+            .padding(24)
+        }
+    }
 
+    private var voiceprintTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
                 VoiceprintLibraryPanel(
                     store: voiceprintStore,
                     pythonPath: settingsManager.pythonPath,
@@ -920,6 +932,8 @@ private struct VoiceprintLibraryPanel: View {
     @ObservedObject var store: VoiceprintStore
     let pythonPath: String
     let scriptsDir: URL
+    @State private var captureSpeakerName = ""
+    @State private var importSourceType: VoiceprintCaptureSourceType = .meeting
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -962,7 +976,7 @@ private struct VoiceprintLibraryPanel: View {
                 .buttonStyle(.plain)
             }
 
-            Text("声纹库会保存用户确认过的角色样本。当前版本先建立样本和 profile；embedding 模型缺失时不会下载，后续安装模型后可用于自动匹配真实说话人。")
+            Text("声纹库会保存用户确认过的角色样本。依赖会安装到 VoiceScribe 独立 Python 环境，不写入系统 Python；模型缺失时只有点击安装才会下载。")
                 .font(.system(size: 11))
                 .foregroundColor(Color(hex: "A0A0B0"))
 
@@ -971,6 +985,32 @@ private struct VoiceprintLibraryPanel: View {
                 .foregroundColor(Color(hex: "A0A0B0"))
                 .lineLimit(1)
                 .truncationMode(.middle)
+
+            VoiceprintCaptureCard(
+                speakerName: $captureSpeakerName,
+                importSourceType: $importSourceType,
+                isRecording: store.isRecording,
+                isWorking: store.isWorking,
+                microphonePermissionStatus: store.microphonePermissionStatus,
+                requestMicrophonePermission: {
+                    store.requestMicrophonePermission()
+                },
+                startRecording: {
+                    store.startRecording(speakerName: captureSpeakerName)
+                },
+                stopRecording: {
+                    Task {
+                        await store.stopRecordingAndCollect(
+                            speakerName: captureSpeakerName,
+                            pythonPath: pythonPath,
+                            scriptsDir: scriptsDir
+                        )
+                    }
+                },
+                importAudio: {
+                    openVoiceprintImportPanel()
+                }
+            )
 
             if let report = store.dependencyReport {
                 VStack(alignment: .leading, spacing: 10) {
@@ -1032,7 +1072,7 @@ private struct VoiceprintLibraryPanel: View {
                             Text(profile.displayName)
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundColor(.white)
-                            Text("\(profile.samples.count) 个样本 · \(profile.embeddingStatus)")
+                            Text("\(profile.sourceSummary) · \(profile.embeddingStatus)")
                                 .font(.system(size: 10))
                                 .foregroundColor(Color(hex: "A0A0B0"))
                         }
@@ -1056,6 +1096,187 @@ private struct VoiceprintLibraryPanel: View {
         .padding(18)
         .background(Color(hex: "1E1E2E").opacity(0.6))
         .cornerRadius(12)
+    }
+
+    private func openVoiceprintImportPanel() {
+        let name = captureSpeakerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            store.message = "请先填写人物名称"
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.title = "选择要加入声纹库的录音"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.audio, .movie]
+        if panel.runModal() == .OK, let url = panel.url {
+            Task {
+                await store.collectVoiceprintSample(
+                    speakerName: name,
+                    audioURL: url,
+                    sourceType: importSourceType,
+                    pythonPath: pythonPath,
+                    scriptsDir: scriptsDir
+                )
+            }
+        }
+    }
+}
+
+private struct VoiceprintCaptureCard: View {
+    @Binding var speakerName: String
+    @Binding var importSourceType: VoiceprintCaptureSourceType
+    let isRecording: Bool
+    let isWorking: Bool
+    let microphonePermissionStatus: String
+    let requestMicrophonePermission: () -> Void
+    let startRecording: () -> Void
+    let stopRecording: () -> Void
+    let importAudio: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "waveform.badge.plus")
+                    .foregroundColor(Color(hex: "4EC9B0"))
+                Text("声纹采集")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                Spacer()
+                if isRecording {
+                    Label("录制中", systemImage: "record.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF5C5C"))
+                }
+            }
+
+            TextField("人物名称，例如：张三", text: $speakerName)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundColor(.white)
+                .padding(9)
+                .background(Color(hex: "12121A"))
+                .cornerRadius(7)
+
+            HStack(spacing: 8) {
+                Label("麦克风：\(microphonePermissionStatus)", systemImage: microphoneIconName)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(microphoneStatusColor)
+                Spacer()
+                Button(action: requestMicrophonePermission) {
+                    HStack(spacing: 4) {
+                        Image(systemName: microphonePermissionStatus == "已授权" ? "checkmark.circle" : "lock.open")
+                        Text(microphoneButtonTitle)
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(microphoneButtonColor.opacity(0.18))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .disabled(isWorking || isRecording || microphonePermissionStatus == "已授权")
+            }
+            .padding(8)
+            .background(Color.white.opacity(0.04))
+            .cornerRadius(7)
+
+            HStack(spacing: 6) {
+                ForEach(VoiceprintCaptureSourceType.allCases) { sourceType in
+                    Button(action: { importSourceType = sourceType }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: sourceType.iconName)
+                            Text(sourceType.shortTitle)
+                        }
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(importSourceType == sourceType ? Color(hex: "4EC9B0") : Color(hex: "A0A0B0"))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(importSourceType == sourceType ? Color(hex: "4EC9B0").opacity(0.12) : Color.white.opacity(0.04))
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button(action: isRecording ? stopRecording : startRecording) {
+                    HStack(spacing: 5) {
+                        Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
+                        Text(isRecording ? "停止并保存" : "直接录制")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(isRecording ? Color(hex: "FF5C5C").opacity(0.25) : Color(hex: "4EC9B0").opacity(0.18))
+                    .cornerRadius(7)
+                }
+                .buttonStyle(.plain)
+                .disabled(isWorking)
+
+                Button(action: importAudio) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "tray.and.arrow.down")
+                        Text("导入录音")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color(hex: "8E81F6").opacity(0.16))
+                    .cornerRadius(7)
+                }
+                .buttonStyle(.plain)
+                .disabled(isWorking || isRecording)
+            }
+
+            Text("直接录制会保存为近场样本；导入录音会按上面的来源标签保存到同一个人名下。")
+                .font(.system(size: 10))
+                .foregroundColor(Color(hex: "A0A0B0"))
+        }
+        .padding(10)
+        .background(Color(hex: "12121A"))
+        .cornerRadius(8)
+    }
+
+    private var microphoneButtonTitle: String {
+        switch microphonePermissionStatus {
+        case "已授权":
+            return "已授权"
+        case "已拒绝", "受限制":
+            return "打开设置"
+        default:
+            return "授权麦克风"
+        }
+    }
+
+    private var microphoneIconName: String {
+        switch microphonePermissionStatus {
+        case "已授权":
+            return "mic.fill"
+        case "已拒绝", "受限制":
+            return "mic.slash.fill"
+        default:
+            return "mic"
+        }
+    }
+
+    private var microphoneStatusColor: Color {
+        switch microphonePermissionStatus {
+        case "已授权":
+            return Color(hex: "4EC9B0")
+        case "已拒绝", "受限制":
+            return Color(hex: "FF5C5C")
+        default:
+            return Color(hex: "F5A623")
+        }
+    }
+
+    private var microphoneButtonColor: Color {
+        microphonePermissionStatus == "已授权" ? Color(hex: "4EC9B0") : Color(hex: "8E81F6")
     }
 }
 

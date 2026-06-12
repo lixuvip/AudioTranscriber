@@ -250,7 +250,7 @@ struct SetupView: View {
                 Text(engine.description)
                     .font(.system(size: 11))
                     .foregroundColor(Color(hex: "A0A0B0"))
-                    .lineLimit(2)
+                    .lineLimit(4)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

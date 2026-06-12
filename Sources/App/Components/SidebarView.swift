@@ -74,6 +74,7 @@ struct SidebarView: View {
                 SidebarTabButton(title: "工作台", icon: "waveform", tab: .workspace, activeTab: $activeTab)
                 SidebarTabButton(title: "批量任务", icon: "queue.play.next", tab: .batchQueue, activeTab: $activeTab, badgeCount: 3)
                 SidebarTabButton(title: "交互校对", icon: "edit.note", tab: .editor, activeTab: $activeTab)
+                SidebarTabButton(title: "声纹库", icon: "person.wave.2", tab: .voiceprints, activeTab: $activeTab)
                 SidebarTabButton(title: "历史记录", icon: "history", tab: .history, activeTab: $activeTab)
                 SidebarTabButton(title: "环境与设置", icon: "settings", tab: .settings, activeTab: $activeTab)
             }
@@ -435,7 +436,7 @@ struct SidebarView: View {
         
         // If GPU utilization is 0, provide a small random background activity or stick to 0.
         // During active local transcription on GPU, it will reflect real usage.
-        if transcriber.isTranscribing && (envChecker.runtimeSelection.engine == .vibeVoiceMLX || envChecker.runtimeSelection.engine == .qwen3ASR) {
+        if transcriber.isTranscribing && envChecker.runtimeSelection.engine.isMLXBased {
             return maxUsage > 0.05 ? maxUsage : Double.random(in: 0.45...0.75)
         }
         return maxUsage

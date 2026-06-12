@@ -24,6 +24,8 @@
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2025. All rights reserved.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>VoiceScribe 需要使用麦克风录制声纹样本，用于建立本地声纹库。</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>LSApplicationCategoryType</key>

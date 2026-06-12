@@ -180,6 +180,8 @@ struct StatusCard: View {
             return ["ffmpeg", "python3", "mlx-audio", "mlx-model"]
         case .qwen3ASR:
             return ["ffmpeg", "python3", "mlx-qwen3-asr", "qwen3-model"]
+        case .qwen3ASRVoiceprint:
+            return ["ffmpeg", "python3", "mlx-qwen3-asr", "qwen3-model", "voiceprint-model"]
         }
     }
 
@@ -190,6 +192,8 @@ struct StatusCard: View {
         case .vibeVoiceMLX:
             return ["python3", "mlx-audio"]
         case .qwen3ASR:
+            return ["python3", "mlx-qwen3-asr"]
+        case .qwen3ASRVoiceprint:
             return ["python3", "mlx-qwen3-asr"]
         }
     }
@@ -202,6 +206,8 @@ struct StatusCard: View {
             return ["mlx-model"]
         case .qwen3ASR:
             return ["qwen3-model"]
+        case .qwen3ASRVoiceprint:
+            return ["qwen3-model", "voiceprint-model"]
         }
     }
 
@@ -213,6 +219,8 @@ struct StatusCard: View {
             return "安装 MLX 依赖"
         case .qwen3ASR:
             return "安装 Qwen3-ASR 依赖"
+        case .qwen3ASRVoiceprint:
+            return "安装 Qwen3 + 声纹依赖"
         }
     }
 
@@ -224,6 +232,8 @@ struct StatusCard: View {
             return "下载 MLX 模型"
         case .qwen3ASR:
             return "下载 Qwen3 模型"
+        case .qwen3ASRVoiceprint:
+            return "下载 Qwen3 + 声纹模型"
         }
     }
 
@@ -235,6 +245,8 @@ struct StatusCard: View {
             return "第 1 步：安装 MLX 依赖"
         case .qwen3ASR:
             return "第 1 步：安装 Qwen3-ASR 依赖"
+        case .qwen3ASRVoiceprint:
+            return "第 1 步：安装 Qwen3 + 声纹依赖"
         }
     }
 
@@ -246,6 +258,8 @@ struct StatusCard: View {
             return "第 2 步：下载 MLX 模型"
         case .qwen3ASR:
             return "第 2 步：下载 Qwen3 模型"
+        case .qwen3ASRVoiceprint:
+            return "第 2 步：下载 Qwen3 + 声纹模型"
         }
     }
 
@@ -257,11 +271,13 @@ struct StatusCard: View {
             return !isMissingPythonDeps
         case .qwen3ASR:
             return !isMissingPythonDeps
+        case .qwen3ASRVoiceprint:
+            return !isMissingPythonDeps
         }
     }
 
     private var missingRequirementsTitle: String {
-        if (envChecker.runtimeSelection.engine == .vibeVoiceMLX || envChecker.runtimeSelection.engine == .qwen3ASR) && isMissingPythonDeps {
+        if envChecker.runtimeSelection.engine.isMLXBased && isMissingPythonDeps {
             return "请按顺序完成：先安装 MLX 依赖，再下载模型。"
         }
         return "检测到 \(envChecker.runtimeSelection.engine.title) 缺失项，可直接安装。"

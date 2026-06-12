@@ -221,6 +221,8 @@ struct SettingsPanel: View {
                 Text(settingsManager.transcriptionEngine.description)
                     .font(.system(size: 11))
                     .foregroundColor(Color(hex: "A0A0B0"))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             HStack(spacing: 10) {
@@ -448,11 +450,11 @@ struct SettingsPanel: View {
                         .buttonStyle(.plain)
                     }
 
-                    if settingsManager.transcriptionEngine == .vibeVoiceMLX {
+                    if settingsManager.transcriptionEngine.isMLXBased {
                         HStack(spacing: 10) {
                             Spacer()
                                 .frame(width: 86)
-                            Text("MLX 引擎同样通过 Python 启动，但检测与安装将按 VibeVoice MLX 路线进行。")
+                            Text("MLX 引擎同样通过 Python 启动，检测与安装会按当前选择的转写路线进行。")
                                 .font(.system(size: 11))
                                 .foregroundColor(Color(hex: "A0A0B0"))
                         }

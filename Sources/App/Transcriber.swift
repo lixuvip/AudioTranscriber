@@ -39,7 +39,10 @@ class Transcriber: ObservableObject {
     @Published var currentTranscriptTitle: String = ""
     private var transcriptionStartTime: Date?
     private var currentEngine: String = ""
+    private var currentTranscriptionEngine: TranscriptionEngine = .funASR
     private var currentModelID: String = ""
+    private var currentPythonPath: String = ""
+    private var currentPythonSitePackages: String = ""
     var currentOutputDir: URL?
     private var audioDurationSeconds: Double?
     private var processedDurationSeconds: Double = 0
@@ -105,7 +108,10 @@ class Transcriber: ObservableObject {
         estimatedTimeRemaining = nil
         transcriptionStartTime = Date()
         currentEngine = engine.rawValue
+        currentTranscriptionEngine = engine
         currentModelID = modelID.isEmpty ? engine.defaultModelID : modelID
+        currentPythonPath = pythonPath
+        currentPythonSitePackages = pythonSitePackages
         currentOutputDir = outDir
         audioDurationSeconds = nil
         processedDurationSeconds = 0
@@ -172,7 +178,7 @@ class Transcriber: ObservableObject {
             scriptPath,
             audioURL.path,
             outDir.path,
-            "--engine", engine.rawValue,
+            "--engine", engine.scriptEngineRawValue,
             "--model-id", modelID.isEmpty ? engine.defaultModelID : modelID,
             "--device", effectiveProfile.device,
             "--threads", "\(effectiveProfile.threads)",
@@ -311,7 +317,7 @@ class Transcriber: ObservableObject {
                 self.appendLog("提交转写任务中...")
                 
                 var arguments: [String: String] = [
-                    "engine": engine.rawValue,
+                    "engine": engine.scriptEngineRawValue,
                     "model_id": modelID.isEmpty ? engine.defaultModelID : modelID,
                     "device": performanceProfile.device,
                     "threads": "\(performanceProfile.threads)",
@@ -393,6 +399,12 @@ class Transcriber: ObservableObject {
                         self.currentTranscriptURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_通话记录.md")
                         self.currentSpeakerMapURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_speaker_map.json")
                         self.currentSpeakerTextURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_整理版.md")
+
+                        if engine.usesVoiceprintLibrary {
+                            self.currentProgress = "声纹库匹配..."
+                            self.appendLog("[Voiceprint] 开始读取本地声纹库匹配已知人物")
+                            await self.runVoiceprintMatchingIfNeeded()
+                        }
                         
                         self.loadSpeakerRolesIfNeeded()
                         self.createHistoryEntry()
@@ -678,16 +690,17 @@ class Transcriber: ObservableObject {
         }
 
         if status == 0 {
-            progress = 1.0
-            currentProgress = "完成 ✓"
-            appendLog("✓ 完成")
-            if isSummarizing {
-                loadSummaryIfExists()
-            } else {
-                loadSpeakerRolesIfNeeded()
-                createHistoryEntry()
-                buildCompletionSummary()
+            if !isSummarizing && currentTranscriptionEngine.usesVoiceprintLibrary {
+                currentProgress = "声纹库匹配..."
+                progress = 0.99
+                appendLog("[Voiceprint] 开始读取本地声纹库匹配已知人物")
+                Task {
+                    await self.runVoiceprintMatchingIfNeeded()
+                    self.finishSuccessfulRun()
+                }
+                return
             }
+            finishSuccessfulRun()
         } else if isTranscribing {
             appendLog("✗ 转写失败 (exit: \(status))")
             appendErrorSuggestion(for: status)
@@ -700,6 +713,129 @@ class Transcriber: ObservableObject {
         isSummarizing = false
         currentTask = nil
         estimatedTimeRemaining = nil
+    }
+
+    private func finishSuccessfulRun() {
+        progress = 1.0
+        currentProgress = "完成 ✓"
+        appendLog("✓ 完成")
+        if isSummarizing {
+            loadSummaryIfExists()
+        } else {
+            loadSpeakerRolesIfNeeded()
+            createHistoryEntry()
+            buildCompletionSummary()
+        }
+        isTranscribing = false
+        isSummarizing = false
+        currentTask = nil
+        estimatedTimeRemaining = nil
+    }
+
+    private func runVoiceprintMatchingIfNeeded() async {
+        guard currentTranscriptionEngine.usesVoiceprintLibrary else { return }
+        guard let audioURL = currentAudioURL, let speakerMapURL = currentSpeakerMapURL else {
+            appendLog("[Voiceprint] 缺少音频或 speaker map，跳过声纹匹配")
+            return
+        }
+        let pythonPath = currentPythonPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pythonPath.isEmpty, FileManager.default.isExecutableFile(atPath: pythonPath) else {
+            appendLog("[Voiceprint] Python 环境不可用，跳过声纹匹配")
+            return
+        }
+
+        let scriptURL = bundleScriptsDir.appendingPathComponent("voiceprint.py")
+        let libraryDir = Self.defaultVoiceprintLibraryDir()
+        let result = await runVoiceprintProcess(
+            pythonPath: pythonPath,
+            arguments: [
+                scriptURL.path,
+                "match",
+                "--audio", audioURL.path,
+                "--speaker-map", speakerMapURL.path,
+                "--library-dir", libraryDir.path,
+            ],
+            pythonSitePackages: currentPythonSitePackages
+        )
+        appendVoiceprintMatchLog(status: result.status, output: result.output)
+    }
+
+    private func runVoiceprintProcess(
+        pythonPath: String,
+        arguments: [String],
+        pythonSitePackages: String
+    ) async -> (status: Int32, output: String) {
+        await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: pythonPath)
+            process.arguments = arguments
+            var env = ProcessInfo.processInfo.environment
+            if !pythonSitePackages.isEmpty {
+                env["PYTHONPATH"] = pythonSitePackages
+            }
+            process.environment = env
+            process.standardInput = FileHandle.nullDevice
+
+            let outputPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = outputPipe
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                return (process.terminationStatus, output)
+            } catch {
+                return (1, error.localizedDescription)
+            }
+        }.value
+    }
+
+    private func appendVoiceprintMatchLog(status: Int32, output: String) {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            appendLog(status == 0 ? "[Voiceprint] 声纹匹配完成，但没有返回匹配结果" : "[Voiceprint] 声纹匹配失败 (exit: \(status))")
+            return
+        }
+
+        for line in trimmed.components(separatedBy: "\n").filter({ !$0.isEmpty }) {
+            guard let data = line.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = dict["type"] as? String else {
+                appendLog("[Voiceprint] \(line)")
+                continue
+            }
+            switch type {
+            case "voiceprint_matched":
+                let matches = dict["matches"] as? [[String: Any]] ?? []
+                if matches.isEmpty {
+                    appendLog("[Voiceprint] 声纹库已读取，但未找到达到阈值的已知人物")
+                } else {
+                    let names = matches.compactMap { $0["displayName"] as? String }.joined(separator: "、")
+                    appendLog("[Voiceprint] 已匹配 \(matches.count) 个已知人物：\(names)")
+                }
+            case "voiceprint_match_skipped":
+                let reason = dict["reason"] as? String ?? "unknown"
+                if let report = dict["dependencyReport"] as? [String: Any],
+                   let missing = report["missing"] as? [String],
+                   !missing.isEmpty {
+                    appendLog("[Voiceprint] 声纹匹配未执行：缺少 \(missing.joined(separator: ", "))")
+                } else {
+                    appendLog("[Voiceprint] 声纹匹配未执行：\(reason)")
+                }
+            default:
+                appendLog("[Voiceprint] \(line)")
+            }
+        }
+    }
+
+    private static func defaultVoiceprintLibraryDir() -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return appSupport
+            .appendingPathComponent("VoiceScribe", isDirectory: true)
+            .appendingPathComponent("Voiceprints", isDirectory: true)
     }
 
     private func appendLog(_ line: String) {

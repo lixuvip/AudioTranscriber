@@ -214,6 +214,10 @@ class EnvironmentChecker: ObservableObject {
         case .qwen3ASR:
             deps.append(checkMLXQwen3ASRStatus(pythonPath))
             deps.append(checkQwen3ASRModelsStatus(pythonPath, modelID: runtimeSelection.modelID))
+        case .qwen3ASRVoiceprint:
+            deps.append(checkMLXQwen3ASRStatus(pythonPath))
+            deps.append(checkQwen3ASRModelsStatus(pythonPath, modelID: runtimeSelection.modelID))
+            deps.append(checkVoiceprintMatchingStatus(pythonPath))
         }
 
         let detection = detectPerformanceProfile(pythonPath: pythonPath, engine: runtimeSelection.engine)
@@ -266,7 +270,7 @@ class EnvironmentChecker: ObservableObject {
                 isUsable = pythonCanImportFunASR(p)
             case .vibeVoiceMLX:
                 isUsable = pythonCanImportMLXAudio(p)
-            case .qwen3ASR:
+            case .qwen3ASR, .qwen3ASRVoiceprint:
                 isUsable = pythonCanImportMLXQwen3ASR(p)
             }
             guard isUsable else { continue }
@@ -686,6 +690,34 @@ class EnvironmentChecker: ObservableObject {
         )
     }
 
+    nonisolated private static func checkVoiceprintMatchingStatus(_ python: String) -> DependencyStatus {
+        let code = """
+        import importlib.util
+        from pathlib import Path
+        import os
+
+        packages_ready = all(importlib.util.find_spec(name) is not None for name in ['speechbrain', 'torch', 'torchaudio'])
+        explicit = os.environ.get('VOICESCRIBE_ECAPA_MODEL_DIR', '').strip()
+        model_ready = bool(explicit and Path(explicit).exists())
+        if not model_ready:
+            cache_root = Path(os.environ.get('HF_HOME', '~/.cache/huggingface')).expanduser()
+            model_root = cache_root / 'hub' / 'models--speechbrain--spkrec-ecapa-voxceleb'
+            snapshots = model_root / 'snapshots'
+            if snapshots.exists():
+                model_ready = any((path / 'hyperparams.yaml').exists() for path in snapshots.iterdir() if path.is_dir())
+            else:
+                model_ready = (model_root / 'hyperparams.yaml').exists()
+        print('OK' if packages_ready and model_ready else '')
+        """
+        let output = runPython(python, code: code, cleanPythonEnvironment: true)
+        let isReady = output.contains("OK")
+        return DependencyStatus(
+            name: "voiceprint-model", icon: "person.wave.2.fill",
+            isReady: isReady,
+            message: isReady ? "✓ 声纹匹配依赖和 ECAPA 模型已就绪" : "✗ 缺少 SpeechBrain/TorchAudio 或 ECAPA 声纹模型"
+        )
+    }
+
     nonisolated private static func detectPerformanceProfile(pythonPath: String, engine: TranscriptionEngine) -> PerformanceProfile {
         let totalCores = intFromShell("sysctl -n hw.ncpu 2>/dev/null", fallback: ProcessInfo.processInfo.processorCount)
         let performanceCores = intFromShell("sysctl -n hw.perflevel0.physicalcpu 2>/dev/null", fallback: max(1, totalCores - 2))
@@ -715,7 +747,7 @@ class EnvironmentChecker: ObservableObject {
             batchSizeSeconds = 60
         }
 
-        let isMLXEngine = engine == .vibeVoiceMLX || engine == .qwen3ASR
+        let isMLXEngine = engine.isMLXBased
         let device = isMLXEngine ? "mlx" : "cpu"
         let chipText = cpuBrand.isEmpty ? "\(totalCores) 核 CPU" : cpuBrand
         let accelerationHint: String
@@ -743,7 +775,7 @@ class EnvironmentChecker: ObservableObject {
         let threads = profile.threads
 
         switch engine {
-        case .vibeVoiceMLX, .qwen3ASR:
+        case .vibeVoiceMLX, .qwen3ASR, .qwen3ASRVoiceprint:
             if memoryGB >= 32 && threads >= 4 {
                 return .high
             } else if memoryGB >= 16 {
@@ -763,7 +795,7 @@ class EnvironmentChecker: ObservableObject {
     }
 
     nonisolated private static func recommendationDetail(from profile: PerformanceProfile, recommendedTier: PerformanceTier, engine: TranscriptionEngine) -> String {
-        let isMLX = engine == .vibeVoiceMLX || engine == .qwen3ASR
+        let isMLX = engine.isMLXBased
         let mode = isMLX ? "MLX" : "CPU"
         return "检测结果：\(profile.summary)。当前建议采用\(recommendedTier.title)档（\(mode)）。"
     }
@@ -783,7 +815,7 @@ class EnvironmentChecker: ObservableObject {
             baseBatch = engine == .vibeVoiceMLX ? 90 : 90
             mergeLength = 12
         case .high:
-            let isMLX = engine == .vibeVoiceMLX || engine == .qwen3ASR
+            let isMLX = engine.isMLXBased
             baseThreads = max(detected.threads, isMLX ? 4 : 2)
             baseBatch = isMLX ? 120 : 120
             mergeLength = 15
@@ -869,6 +901,12 @@ class EnvironmentChecker: ObservableObject {
             case .medium: requiredGB = 4.0
             case .low: requiredGB = 2.5
             }
+        case .qwen3ASRVoiceprint:
+            switch currentTier {
+            case .high: requiredGB = 9.0
+            case .medium: requiredGB = 5.0
+            case .low: requiredGB = 3.5
+            }
         }
 
         let isSafe = availableGB >= requiredGB
@@ -929,6 +967,8 @@ class EnvironmentChecker: ObservableObject {
         case .funASR:       pkgs = "funasr modelscope openai"
         case .vibeVoiceMLX: pkgs = "mlx-audio huggingface_hub openai"
         case .qwen3ASR:     pkgs = "\"mlx-qwen3-asr[diarize]\" huggingface_hub openai"
+        case .qwen3ASRVoiceprint:
+            pkgs = "\"mlx-qwen3-asr[diarize]\" huggingface_hub openai speechbrain torch torchaudio"
         }
 
         let script = """
@@ -969,6 +1009,9 @@ class EnvironmentChecker: ObservableObject {
         case .vibeVoiceMLX, .qwen3ASR:
             let repo = runtimeSelection.modelID.replacingOccurrences(of: "\"", with: "")
             script = "\"\(python)\" -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='\(repo)')\""
+        case .qwen3ASRVoiceprint:
+            let repo = runtimeSelection.modelID.replacingOccurrences(of: "\"", with: "")
+            script = "\"\(python)\" -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='\(repo)'); snapshot_download(repo_id='speechbrain/spkrec-ecapa-voxceleb')\""
         }
 
         isInstallingDependency = true
@@ -1062,6 +1105,8 @@ class EnvironmentChecker: ObservableObject {
             return ["ffmpeg", "python3", "mlx-audio", "mlx-model"]
         case .qwen3ASR:
             return ["ffmpeg", "python3", "mlx-qwen3-asr", "qwen3-model"]
+        case .qwen3ASRVoiceprint:
+            return ["ffmpeg", "python3", "mlx-qwen3-asr", "qwen3-model", "voiceprint-model"]
         }
     }
 }

@@ -39,6 +39,10 @@ if [[ ! -f "$DIST_APP/Contents/Resources/AppIcon.icns" ]]; then
   exit 1
 fi
 
+echo "==> Ad-hoc signing app bundle"
+/usr/bin/codesign --force --deep --sign - "$DIST_APP"
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$DIST_APP"
+
 echo "==> Creating DMG"
 # Create a temporary layout directory
 DMG_LAYOUT="$DIST_DIR/dmg_layout"

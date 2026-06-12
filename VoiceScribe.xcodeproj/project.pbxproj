@@ -20,6 +20,7 @@
 		471B8DD0CD9B0DD0F88B8CAA /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030F23089880347CA781E740 /* SettingsManager.swift */; };
 		4D5DBC44515DB9A74E833566 /* TranscriptionHistoryEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB278065885CEB6DD0C3EB6 /* TranscriptionHistoryEntry.swift */; };
 		4E6E160967FBD3F11A1481E3 /* StatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D50E523140C54843C5E7975 /* StatusCard.swift */; };
+		55930A3D2849015EB73ADA2E /* VoiceprintStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18D5C307306319C4CECAD358 /* VoiceprintStore.swift */; };
 		57B344624C14C625588CB522 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 808D1BCA3CFA5C38A366A803 /* Assets.xcassets */; };
 		5EDAAEDCC346CBDD4B65F96F /* AIInsightsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77EA38F6F6CBEBC74AD18DB1 /* AIInsightsPanel.swift */; };
 		6344E06CA0FE97BA2ECBC403 /* RemoteTranscriberClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB0362D2F8A910FEC4B8EB /* RemoteTranscriberClient.swift */; };
@@ -31,6 +32,7 @@
 		A8EF6E036E392BF1B1D238EF /* FolderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 665FE5B0C9E57FC0B4EF000F /* FolderPicker.swift */; };
 		B76AA00391FB6F0EFDC2245A /* FileDropZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37F86800A30E6326FEB374C /* FileDropZone.swift */; };
 		D9691A1AA1C51E7B29DF22C9 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C955ECCD1DFAB967359B5973 /* SetupView.swift */; };
+		DAE360C5BB48F6A8132346B3 /* voiceprint.py in Resources */ = {isa = PBXBuildFile; fileRef = 84F8770031D03B0691A7D866 /* voiceprint.py */; };
 		F08F57D4736AD2E2E59E200F /* FolderPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E24E8CD5250B4691EB33CEC /* FolderPickerSheet.swift */; };
 		FDB9B11A12CC4D299CE5224A /* summarize.py in Resources */ = {isa = PBXBuildFile; fileRef = 9D1F11429FCD24BEAEAEFEFF /* summarize.py */; };
 		FF9C2E1CE2C821210C0E8620 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 4EEB4566CCFF1C22B0C4F557 /* AppIcon.icns */; };
@@ -41,6 +43,7 @@
 		030F23089880347CA781E740 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		03DEA15EE20766357A9838D2 /* Transcriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transcriber.swift; sourceTree = "<group>"; };
 		0FAA0DB43F9603FF23C341D2 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		18D5C307306319C4CECAD358 /* VoiceprintStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceprintStore.swift; sourceTree = "<group>"; };
 		190678458E7008DF86D4F857 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		2D50E523140C54843C5E7975 /* StatusCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusCard.swift; sourceTree = "<group>"; };
 		2EDB0362D2F8A910FEC4B8EB /* RemoteTranscriberClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTranscriberClient.swift; sourceTree = "<group>"; };
@@ -56,6 +59,7 @@
 		77EA38F6F6CBEBC74AD18DB1 /* AIInsightsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIInsightsPanel.swift; sourceTree = "<group>"; };
 		7E52BCF645A5CE24FDBBC034 /* WaveformVisualizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformVisualizer.swift; sourceTree = "<group>"; };
 		808D1BCA3CFA5C38A366A803 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		84F8770031D03B0691A7D866 /* voiceprint.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = voiceprint.py; sourceTree = "<group>"; };
 		8E0CE40A95BF596293606D7E /* SettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPanel.swift; sourceTree = "<group>"; };
 		8E24E8CD5250B4691EB33CEC /* FolderPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderPickerSheet.swift; sourceTree = "<group>"; };
 		9D1F11429FCD24BEAEAEFEFF /* summarize.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = summarize.py; sourceTree = "<group>"; };
@@ -100,6 +104,7 @@
 			children = (
 				9D1F11429FCD24BEAEAEFEFF /* summarize.py */,
 				F47C961537E47C956498D347 /* transcribe.py */,
+				84F8770031D03B0691A7D866 /* voiceprint.py */,
 			);
 			path = Scripts;
 			sourceTree = "<group>";
@@ -137,6 +142,7 @@
 				C955ECCD1DFAB967359B5973 /* SetupView.swift */,
 				03DEA15EE20766357A9838D2 /* Transcriber.swift */,
 				6CB278065885CEB6DD0C3EB6 /* TranscriptionHistoryEntry.swift */,
+				18D5C307306319C4CECAD358 /* VoiceprintStore.swift */,
 				A27B2E9DE44F80516145703C /* Components */,
 			);
 			path = App;
@@ -216,6 +222,7 @@
 				57B344624C14C625588CB522 /* Assets.xcassets in Resources */,
 				FDB9B11A12CC4D299CE5224A /* summarize.py in Resources */,
 				35ECE4630B5DB53D22640C70 /* transcribe.py in Resources */,
+				DAE360C5BB48F6A8132346B3 /* voiceprint.py in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -248,6 +255,7 @@
 				1B13938ECB09D0D256B2FC74 /* Transcriber.swift in Sources */,
 				4D5DBC44515DB9A74E833566 /* TranscriptionHistoryEntry.swift in Sources */,
 				6E45602B50CA2E9E90CDE200 /* TranscriptionTimelineView.swift in Sources */,
+				55930A3D2849015EB73ADA2E /* VoiceprintStore.swift in Sources */,
 				178DC2918C57A4315BC9A0EB /* WaveformVisualizer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

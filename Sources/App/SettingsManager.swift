@@ -44,6 +44,7 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
     case funASR
     case vibeVoiceMLX
     case qwen3ASR
+    case qwen3ASRVoiceprint
 
     var id: String { rawValue }
 
@@ -55,24 +56,28 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return "VibeVoice MLX"
         case .qwen3ASR:
             return "Qwen3-ASR"
+        case .qwen3ASRVoiceprint:
+            return "Qwen3-ASR + 声纹库"
         }
     }
 
     var description: String {
         switch self {
         case .funASR:
-            return "支持 cam++ 说话人区分，适合会议转写"
+            return "本地转写引擎；paraformer 可配合 cam++ 区分说话人并生成角色段落，不读取声纹库。SenseVoice/Fun-ASR-Nano 仅做转写或弱分段。"
         case .vibeVoiceMLX:
-            return "Apple Silicon 优化，支持说话人和时间戳"
+            return "Apple Silicon MLX 本地转写；主要负责高效 ASR 和时间戳解析，当前不接入声纹库，不能直接用已采集声纹识别具体人物。"
         case .qwen3ASR:
-            return "Apple Silicon 原生 MLX，中文方言之王，8/4-bit 量化"
+            return "Apple Silicon MLX 转写引擎；可选 pyannote 做多说话人区分，适合中文和方言。声纹库暂不参与在线识别，只用于后续人物样本沉淀。"
+        case .qwen3ASRVoiceprint:
+            return "组合引擎：先用 Qwen3-ASR + pyannote 转写并区分说话人，再读取本地声纹库匹配已知人物；需要 SpeechBrain ECAPA 声纹模型。"
         }
     }
 
     static func available(for environment: RuntimeEnvironment) -> [TranscriptionEngine] {
         switch environment {
         case .macAppleSilicon:
-            return [.vibeVoiceMLX, .qwen3ASR, .funASR]
+            return [.vibeVoiceMLX, .qwen3ASR, .qwen3ASRVoiceprint, .funASR]
         }
     }
 
@@ -83,6 +88,8 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         case .vibeVoiceMLX:
             return "mlx-community/VibeVoice-ASR-4bit"
         case .qwen3ASR:
+            return "Qwen/Qwen3-ASR-0.6B"
+        case .qwen3ASRVoiceprint:
             return "Qwen/Qwen3-ASR-0.6B"
         }
     }
@@ -104,7 +111,33 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
                 "Qwen/Qwen3-ASR-0.6B",
                 "Qwen/Qwen3-ASR-1.7B",
             ]
+        case .qwen3ASRVoiceprint:
+            return [
+                "Qwen/Qwen3-ASR-0.6B",
+                "Qwen/Qwen3-ASR-1.7B",
+            ]
         }
+    }
+
+    var scriptEngineRawValue: String {
+        switch self {
+        case .qwen3ASRVoiceprint:
+            return TranscriptionEngine.qwen3ASR.rawValue
+        default:
+            return rawValue
+        }
+    }
+
+    var usesVoiceprintLibrary: Bool {
+        self == .qwen3ASRVoiceprint
+    }
+
+    var isMLXBased: Bool {
+        self == .vibeVoiceMLX || self == .qwen3ASR || self == .qwen3ASRVoiceprint
+    }
+
+    var isQwen3Based: Bool {
+        self == .qwen3ASR || self == .qwen3ASRVoiceprint
     }
 }
 
@@ -218,7 +251,8 @@ class SettingsManager: ObservableObject {
         switch resolvedEngine {
         case .funASR:       validPrefixes = ["paraformer", "fsmn", "iic/", "damo/", "funasr", "FunAudioLLM/"]
         case .vibeVoiceMLX: validPrefixes = ["mlx-community/VibeVoice", "mlx-community/Whisper"]
-        case .qwen3ASR:     validPrefixes = ["Qwen/Qwen3-ASR", "Qwen/Qwen3-ForcedAligner"]
+        case .qwen3ASR, .qwen3ASRVoiceprint:
+            validPrefixes = ["Qwen/Qwen3-ASR", "Qwen/Qwen3-ForcedAligner"]
         }
         let isValid = savedModelID.isEmpty || validPrefixes.contains(where: { savedModelID.hasPrefix($0) })
         transcriptionModelID = isValid ? (savedModelID.isEmpty ? resolvedEngine.defaultModelID : savedModelID) : resolvedEngine.defaultModelID
