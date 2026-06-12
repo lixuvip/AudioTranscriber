@@ -11,7 +11,9 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        token = os.environ.get("VOICESCRIBE_TOKEN", "default-voicescribe-token")
+        token = os.environ.get("VOICESCRIBE_TOKEN", "").strip()
+        if not token:
+            raise ValueError("VOICESCRIBE_TOKEN must not be empty")
         
         # Default data root to ~/.cache/VoiceScribeServer
         default_root = Path("~/.cache/VoiceScribeServer").expanduser()

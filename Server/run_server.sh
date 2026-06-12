@@ -31,8 +31,10 @@ else
   PYTHON_EXEC="python3"
 fi
 
-# Set default token if not set
-export VOICESCRIBE_TOKEN="${VOICESCRIBE_TOKEN:-default-voicescribe-token}"
+if [ -z "${VOICESCRIBE_TOKEN:-}" ]; then
+  echo "Error: VOICESCRIBE_TOKEN is not set." >&2
+  exit 1
+fi
 export VOICESCRIBE_DATA_ROOT="${VOICESCRIBE_DATA_ROOT:-$HOME/.cache/VoiceScribeServer}"
 export VOICESCRIBE_SCRIPTS_DIR="${VOICESCRIBE_SCRIPTS_DIR:-$SERVER_DIR/../Scripts}"
 
