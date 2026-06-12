@@ -4,6 +4,7 @@ import Combine
 enum ExecutionTarget: String, CaseIterable, Identifiable {
     case local
     case remote
+    case relay
 
     var id: String { rawValue }
 
@@ -13,6 +14,8 @@ enum ExecutionTarget: String, CaseIterable, Identifiable {
             return "本机运行"
         case .remote:
             return "远程 Mac mini"
+        case .relay:
+            return "公网中转服务器"
         }
     }
 }
@@ -178,6 +181,10 @@ class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(remoteTailscaleURL, forKey: "remoteTailscaleURL") }
     }
 
+    @Published var relayServiceURL: String {
+        didSet { UserDefaults.standard.set(relayServiceURL, forKey: "relayServiceURL") }
+    }
+
     @Published var speakerDiarizationEnabled: Bool {
         didSet { UserDefaults.standard.set(speakerDiarizationEnabled, forKey: "speakerDiarizationEnabled") }
     }
@@ -224,6 +231,7 @@ class SettingsManager: ObservableObject {
         executionTarget = savedExecutionTarget
         remoteServiceURL = UserDefaults.standard.string(forKey: "remoteServiceURL") ?? "http://192.168.3.79:8766"
         remoteTailscaleURL = UserDefaults.standard.string(forKey: "remoteTailscaleURL") ?? ""
+        relayServiceURL = UserDefaults.standard.string(forKey: "relayServiceURL") ?? "https://api.example.com"
         remoteAvailableEngines = [.vibeVoiceMLX, .funASR, .qwen3ASR]
         
         if UserDefaults.standard.object(forKey: "speakerDiarizationEnabled") == nil {

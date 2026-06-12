@@ -31,41 +31,63 @@ struct SettingsPanel: View {
 
     private func loadTokenFromKeychain() {
         let store = VoiceScribeKeychainStore()
-        if let url = normalizedURL(settingsManager.remoteServiceURL),
-           let saved = try? store.token(for: url), !saved.isEmpty {
-            remoteToken = saved
-            return
-        }
-        if let tsUrl = normalizedURL(settingsManager.remoteTailscaleURL),
-           let saved = try? store.token(for: tsUrl), !saved.isEmpty {
-            remoteToken = saved
-            return
+        if settingsManager.executionTarget == .relay {
+            if let url = normalizedURL(settingsManager.relayServiceURL),
+               let saved = try? store.token(for: url), !saved.isEmpty {
+                remoteToken = saved
+                return
+            }
+        } else {
+            if let url = normalizedURL(settingsManager.remoteServiceURL),
+               let saved = try? store.token(for: url), !saved.isEmpty {
+                remoteToken = saved
+                return
+            }
+            if let tsUrl = normalizedURL(settingsManager.remoteTailscaleURL),
+               let saved = try? store.token(for: tsUrl), !saved.isEmpty {
+                remoteToken = saved
+                return
+            }
         }
         remoteToken = ""
     }
 
     private func saveTokenToKeychain() {
         let store = VoiceScribeKeychainStore()
-        if let url = normalizedURL(settingsManager.remoteServiceURL) {
-            do {
-                if remoteToken.isEmpty {
-                    try store.deleteToken(for: url)
-                } else {
-                    try store.saveToken(remoteToken, for: url)
+        if settingsManager.executionTarget == .relay {
+            if let url = normalizedURL(settingsManager.relayServiceURL) {
+                do {
+                    if remoteToken.isEmpty {
+                        try store.deleteToken(for: url)
+                    } else {
+                        try store.saveToken(remoteToken, for: url)
+                    }
+                } catch {
+                    print("Keychain save failed for relayServiceURL: \(error)")
                 }
-            } catch {
-                print("Keychain save failed for remoteServiceURL: \(error)")
             }
-        }
-        if let tsUrl = normalizedURL(settingsManager.remoteTailscaleURL) {
-            do {
-                if remoteToken.isEmpty {
-                    try store.deleteToken(for: tsUrl)
-                } else {
-                    try store.saveToken(remoteToken, for: tsUrl)
+        } else {
+            if let url = normalizedURL(settingsManager.remoteServiceURL) {
+                do {
+                    if remoteToken.isEmpty {
+                        try store.deleteToken(for: url)
+                    } else {
+                        try store.saveToken(remoteToken, for: url)
+                    }
+                } catch {
+                    print("Keychain save failed for remoteServiceURL: \(error)")
                 }
-            } catch {
-                print("Keychain save failed for remoteTailscaleURL: \(error)")
+            }
+            if let tsUrl = normalizedURL(settingsManager.remoteTailscaleURL) {
+                do {
+                    if remoteToken.isEmpty {
+                        try store.deleteToken(for: tsUrl)
+                    } else {
+                        try store.saveToken(remoteToken, for: tsUrl)
+                    }
+                } catch {
+                    print("Keychain save failed for remoteTailscaleURL: \(error)")
+                }
             }
         }
     }
@@ -77,6 +99,30 @@ struct SettingsPanel: View {
         connectionColor = "7C6FE3"
         Task {
             let client = RemoteTranscriberClient()
+            
+            if settingsManager.executionTarget == .relay {
+                let relayClean = settingsManager.relayServiceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                if relayClean.isEmpty {
+                    connectionStatus = "中转服务器地址为空"
+                    connectionColor = "F08A8A"
+                    isTestingConnection = false
+                    return
+                }
+                do {
+                    let health = try await client.health(serviceURL: relayClean, isRelay: true, timeout: 5)
+                    await MainActor.run {
+                        settingsManager.updateRemoteAvailableEngines(with: health.availableEngines)
+                    }
+                    connectionStatus = "连接中转服务器成功 ✓ (队列: \(health.queueDepth)人)"
+                    connectionColor = "4EC9B0"
+                } catch {
+                    connectionStatus = "连接中转服务器失败 ✗: \(error.localizedDescription)"
+                    connectionColor = "F08A8A"
+                }
+                isTestingConnection = false
+                return
+            }
+            
             var primarySuccess = false
             var primaryQueue = 0
             var primaryError: Error?
@@ -144,6 +190,9 @@ struct SettingsPanel: View {
                 .pickerStyle(.menu)
                 .background(Color(hex: "1E1E2E"))
                 .cornerRadius(6)
+                .onChange(of: settingsManager.executionTarget) { _ in
+                    loadTokenFromKeychain()
+                }
 
                 Spacer()
             }
@@ -210,56 +259,78 @@ struct SettingsPanel: View {
                     .foregroundColor(Color(hex: "A0A0B0"))
             }
 
-            if settingsManager.executionTarget == .remote {
+            if settingsManager.executionTarget == .remote || settingsManager.executionTarget == .relay {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 10) {
-                        Spacer().frame(width: 16)
-                        Text("服务器地址")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color(hex: "A0A0B0"))
-                            .frame(width: 60, alignment: .leading)
-                        
-                        TextField("http://192.168.3.79:8766", text: $settingsManager.remoteServiceURL)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(.white)
-                            .padding(8)
-                            .background(Color(hex: "1E1E2E"))
-                            .cornerRadius(6)
-                            .onChange(of: settingsManager.remoteServiceURL) { _ in
-                                loadTokenFromKeychain()
-                            }
+                    if settingsManager.executionTarget == .relay {
+                        HStack(spacing: 10) {
+                            Spacer().frame(width: 16)
+                            Text("中转服务器")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Color(hex: "A0A0B0"))
+                                .frame(width: 60, alignment: .leading)
+                            
+                            TextField("https://api.example.com", text: $settingsManager.relayServiceURL)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color(hex: "1E1E2E"))
+                                .cornerRadius(6)
+                                .onChange(of: settingsManager.relayServiceURL) { _ in
+                                    loadTokenFromKeychain()
+                                }
+                        }
+                        .padding(.leading, 10)
+                    } else {
+                        HStack(spacing: 10) {
+                            Spacer().frame(width: 16)
+                            Text("服务器地址")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Color(hex: "A0A0B0"))
+                                .frame(width: 60, alignment: .leading)
+                            
+                            TextField("http://192.168.3.79:8766", text: $settingsManager.remoteServiceURL)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color(hex: "1E1E2E"))
+                                .cornerRadius(6)
+                                .onChange(of: settingsManager.remoteServiceURL) { _ in
+                                    loadTokenFromKeychain()
+                                }
+                        }
+                        .padding(.leading, 10)
+
+                        HStack(spacing: 10) {
+                            Spacer().frame(width: 16)
+                            Text("Tailscale地址")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Color(hex: "A0A0B0"))
+                                .frame(width: 60, alignment: .leading)
+                            
+                            TextField("http://100.x.y.z:8766 (选填)", text: $settingsManager.remoteTailscaleURL)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color(hex: "1E1E2E"))
+                                .cornerRadius(6)
+                                .onChange(of: settingsManager.remoteTailscaleURL) { _ in
+                                    loadTokenFromKeychain()
+                                }
+                        }
+                        .padding(.leading, 10)
                     }
-                    .padding(.leading, 10)
 
                     HStack(spacing: 10) {
                         Spacer().frame(width: 16)
-                        Text("Tailscale地址")
+                        Text(settingsManager.executionTarget == .relay ? "中转访问令牌" : "访问令牌")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(Color(hex: "A0A0B0"))
                             .frame(width: 60, alignment: .leading)
                         
-                        TextField("http://100.x.y.z:8766 (选填)", text: $settingsManager.remoteTailscaleURL)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(.white)
-                            .padding(8)
-                            .background(Color(hex: "1E1E2E"))
-                            .cornerRadius(6)
-                            .onChange(of: settingsManager.remoteTailscaleURL) { _ in
-                                loadTokenFromKeychain()
-                            }
-                    }
-                    .padding(.leading, 10)
-
-                    HStack(spacing: 10) {
-                        Spacer().frame(width: 16)
-                        Text("访问令牌")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color(hex: "A0A0B0"))
-                            .frame(width: 60, alignment: .leading)
-                        
-                        SecureField("在 Mac mini 上配置的 Bearer Token", text: $remoteToken)
+                        SecureField(settingsManager.executionTarget == .relay ? "中转服务器访问令牌 Bearer Token" : "在 Mac mini 上配置的 Bearer Token", text: $remoteToken)
                             .textFieldStyle(.plain)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(.white)

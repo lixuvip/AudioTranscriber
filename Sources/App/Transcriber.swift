@@ -47,6 +47,7 @@ class Transcriber: ObservableObject {
     private var etaTimer: Timer?
     private var remoteTaskID: String?
     private var remoteServiceURL: String?
+    private var executionTarget: ExecutionTarget = .local
 
     var bundleScriptsDir: URL {
         if Bundle.main.resourceURL != nil {
@@ -66,6 +67,7 @@ class Transcriber: ObservableObject {
         executionTarget: ExecutionTarget = .local,
         remoteServiceURL: String = "",
         remoteTailscaleURL: String = "",
+        relayServiceURL: String = "",
         speakerDiarizationEnabled: Bool = true
     ) {
         guard let audioURL = audioURL else { return }
@@ -92,7 +94,8 @@ class Transcriber: ObservableObject {
         currentTranscriptTitle = audioURL.deletingPathExtension().lastPathComponent
         isTranscribing = true
         lastKnownStageIndex = 0
-        isRemoteTranscription = (executionTarget == .remote)
+        self.executionTarget = executionTarget
+        isRemoteTranscription = (executionTarget == .remote || executionTarget == .relay)
         isSummarizing = false
         logs = []
         progress = 0
@@ -107,8 +110,8 @@ class Transcriber: ObservableObject {
         audioDurationSeconds = nil
         processedDurationSeconds = 0
 
-        if executionTarget == .remote {
-            self.remoteServiceURL = remoteServiceURL
+        if executionTarget == .remote || executionTarget == .relay {
+            self.remoteServiceURL = executionTarget == .relay ? relayServiceURL : remoteServiceURL
             self.startRemoteTranscription(
                 audioURL: audioURL,
                 outDir: outDir,
@@ -117,6 +120,8 @@ class Transcriber: ObservableObject {
                 modelID: modelID,
                 remoteServiceURL: remoteServiceURL,
                 remoteTailscaleURL: remoteTailscaleURL,
+                relayServiceURL: relayServiceURL,
+                executionTarget: executionTarget,
                 speakerDiarizationEnabled: speakerDiarizationEnabled
             )
             return
@@ -218,6 +223,8 @@ class Transcriber: ObservableObject {
         modelID: String,
         remoteServiceURL: String,
         remoteTailscaleURL: String,
+        relayServiceURL: String,
+        executionTarget: ExecutionTarget,
         speakerDiarizationEnabled: Bool
     ) {
         Task {
@@ -228,49 +235,61 @@ class Transcriber: ObservableObject {
                 
                 let client = RemoteTranscriberClient()
                 var activeURL = ""
+                let isRelay = (executionTarget == .relay)
                 
-                // 1. 尝试检测局域网连接
-                var primaryConnected = false
-                let primaryClean = remoteServiceURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !primaryClean.isEmpty {
-                    do {
-                        self.appendLog("正在测试局域网连接: \(primaryClean)...")
-                        _ = try await client.health(serviceURL: primaryClean, timeout: 2.0)
-                        primaryConnected = true
-                        activeURL = primaryClean
-                        self.appendLog("✓ 局域网连接成功，将使用局域网地址。")
-                    } catch {
-                        self.appendLog("⚠️ 局域网连接失败: \(error.localizedDescription)")
+                if isRelay {
+                    let relayClean = relayServiceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if relayClean.isEmpty {
+                        throw VoiceScribeRemoteClientError.invalidServiceURL
                     }
-                }
-                
-                // 2. 如果局域网失败，且配置了 Tailscale，尝试检测 Tailscale 连接
-                if !primaryConnected {
-                    let tsURL = remoteTailscaleURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !tsURL.isEmpty {
-                        self.appendLog("正在尝试切换到 Tailscale 地址: \(tsURL)...")
+                    self.appendLog("正在连接中转服务器: \(relayClean)...")
+                    _ = try await client.health(serviceURL: relayClean, isRelay: true, timeout: 5.0)
+                    activeURL = relayClean
+                    self.appendLog("✓ 中转服务器连接成功。")
+                } else {
+                    // 1. 尝试检测局域网连接
+                    var primaryConnected = false
+                    let primaryClean = remoteServiceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !primaryClean.isEmpty {
                         do {
-                            _ = try await client.health(serviceURL: tsURL, timeout: 3.0)
+                            self.appendLog("正在测试局域网连接: \(primaryClean)...")
+                            _ = try await client.health(serviceURL: primaryClean, isRelay: false, timeout: 2.0)
                             primaryConnected = true
-                            activeURL = tsURL
-                            self.appendLog("✓ Tailscale 连接成功，已切换到 Tailscale 地址。")
+                            activeURL = primaryClean
+                            self.appendLog("✓ 局域网连接成功，将使用局域网地址。")
                         } catch {
-                            self.appendLog("❌ Tailscale 连接亦失败: \(error.localizedDescription)")
-                            if primaryClean.isEmpty {
-                                throw error
+                            self.appendLog("⚠️ 局域网连接失败: \(error.localizedDescription)")
+                        }
+                    }
+                    
+                    // 2. 如果局域网失败，且配置了 Tailscale，尝试检测 Tailscale 连接
+                    if !primaryConnected {
+                        let tsURL = remoteTailscaleURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !tsURL.isEmpty {
+                            self.appendLog("正在尝试切换到 Tailscale 地址: \(tsURL)...")
+                            do {
+                                _ = try await client.health(serviceURL: tsURL, isRelay: false, timeout: 3.0)
+                                primaryConnected = true
+                                activeURL = tsURL
+                                self.appendLog("✓ Tailscale 连接成功，已切换到 Tailscale 地址。")
+                            } catch {
+                                self.appendLog("❌ Tailscale 连接亦失败: \(error.localizedDescription)")
+                                if primaryClean.isEmpty {
+                                    throw error
+                                }
+                                self.appendLog("默认回退至局域网地址进行尝试。")
                             }
-                            self.appendLog("默认回退至局域网地址进行尝试。")
+                        } else {
+                            if primaryClean.isEmpty {
+                                throw VoiceScribeRemoteClientError.invalidServiceURL
+                            }
+                            self.appendLog("未配置 Tailscale 备份地址，默认使用局域网地址进行尝试。")
                         }
-                    } else {
-                        if primaryClean.isEmpty {
-                            throw VoiceScribeRemoteClientError.invalidServiceURL
-                        }
-                        self.appendLog("未配置 Tailscale 备份地址，默认使用局域网地址进行尝试。")
                     }
                 }
                 
                 if activeURL.isEmpty {
-                    activeURL = primaryClean
+                    activeURL = isRelay ? relayServiceURL.trimmingCharacters(in: .whitespacesAndNewlines) : remoteServiceURL.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
                 
                 // 记录当前活跃的 URL，用于停止任务等操作
@@ -279,7 +298,7 @@ class Transcriber: ObservableObject {
                 appendLog("开始上传音频到远程服务器: \(audioURL.lastPathComponent)")
                 currentProgress = "正在上传音频..."
                 self.updateStageIndex(for: "上传")
-                let uploadResult = try await client.uploadAudio(at: audioURL, serviceURL: activeURL)
+                let uploadResult = try await client.uploadAudio(at: audioURL, serviceURL: activeURL, isRelay: isRelay)
                 appendLog("音频上传成功, ID: \(uploadResult.uploadID)")
                 
                 if self.didRequestStop {
@@ -307,7 +326,8 @@ class Transcriber: ObservableObject {
                 let taskStatus = try await client.createTask(
                     serviceURL: activeURL,
                     uploadID: uploadResult.uploadID,
-                    arguments: arguments
+                    arguments: arguments,
+                    isRelay: isRelay
                 )
                 let taskID = taskStatus.taskID
                 self.remoteTaskID = taskID
@@ -323,7 +343,7 @@ class Transcriber: ObservableObject {
                 while !isDone {
                     if self.didRequestStop {
                         self.appendLog("正在终止远程任务...")
-                        try? await client.deleteTask(taskID: taskID, serviceURL: activeURL)
+                        try? await client.deleteTask(taskID: taskID, serviceURL: activeURL, isRelay: isRelay)
                         self.markStoppedByUser()
                         return
                     }
@@ -334,7 +354,7 @@ class Transcriber: ObservableObject {
                         continue
                     }
                     
-                    let status = try await client.taskStatus(taskID: taskID, serviceURL: activeURL)
+                    let status = try await client.taskStatus(taskID: taskID, serviceURL: activeURL, isRelay: isRelay)
                     self.progress = min(status.progress, 0.99)
                     let remoteStage = status.currentStage ?? self.statusTitle(for: status.status)
                     self.currentProgress = remoteStage
@@ -354,7 +374,8 @@ class Transcriber: ObservableObject {
                             let (tempURL, _) = try await client.downloadResult(
                                 taskID: taskID,
                                 index: file.index,
-                                serviceURL: activeURL
+                                serviceURL: activeURL,
+                                isRelay: isRelay
                             )
                             let destURL = outDir.appendingPathComponent(file.filename)
                             if FileManager.default.fileExists(atPath: destURL.path) {
@@ -420,7 +441,7 @@ class Transcriber: ObservableObject {
             Task {
                 do {
                     let client = RemoteTranscriberClient()
-                    try await client.deleteTask(taskID: taskID, serviceURL: serviceURL)
+                    try await client.deleteTask(taskID: taskID, serviceURL: serviceURL, isRelay: self.executionTarget == .relay)
                     self.appendLog("远程任务已取消。")
                 } catch {
                     self.appendLog("取消远程任务失败: \(error.localizedDescription)")

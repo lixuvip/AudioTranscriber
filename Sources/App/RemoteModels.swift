@@ -35,11 +35,13 @@ struct VoiceScribeRemoteUpload: Codable, Sendable {
 }
 
 struct VoiceScribeRemoteTaskCreateRequest: Codable, Sendable {
+    var service: String?
     let command: String
     let arguments: [String: String]
     let uploadID: String?
 
     enum CodingKeys: String, CodingKey {
+        case service
         case command
         case arguments
         case uploadID = "upload_id"

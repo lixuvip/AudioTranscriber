@@ -7,6 +7,7 @@ struct ContentView: View {
     @StateObject private var transcriber = Transcriber()
     @StateObject private var settingsManager = SettingsManager()
     @StateObject private var historyManager = HistoryManager()
+    @StateObject private var voiceprintStore = VoiceprintStore()
 
     @State private var selectedFileURL: URL?
     @State private var customOutputDir: String = ""
@@ -90,6 +91,7 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.25), value: activeTab)
         .background(Color(hex: "12121A"))
         .onAppear {
+            voiceprintStore.load()
             envChecker.customPythonPath = settingsManager.pythonPath
             envChecker.updateRuntimeSelection(
                 environment: settingsManager.runtimeEnvironment,
@@ -289,6 +291,7 @@ struct ContentView: View {
                                 executionTarget: settingsManager.executionTarget,
                                 remoteServiceURL: settingsManager.remoteServiceURL,
                                 remoteTailscaleURL: settingsManager.remoteTailscaleURL,
+                                relayServiceURL: settingsManager.relayServiceURL,
                                 speakerDiarizationEnabled: settingsManager.speakerDiarizationEnabled
                             )
                         }) {
@@ -342,6 +345,9 @@ struct ContentView: View {
                             },
                             onApply: {
                                 transcriber.applySpeakerNames()
+                            },
+                            onEnroll: { role in
+                                enrollVoiceprint(role)
                             }
                         )
                         .padding(.top, 8)
@@ -546,6 +552,9 @@ struct ContentView: View {
                                             },
                                             onApply: {
                                                 transcriber.applySpeakerNames()
+                                            },
+                                            onEnroll: { role in
+                                                enrollVoiceprint(role)
                                             }
                                         )
                                         .padding(.bottom, 8)
@@ -814,8 +823,26 @@ struct ContentView: View {
                 .padding(18)
                 .background(Color(hex: "1E1E2E").opacity(0.6))
                 .cornerRadius(12)
+
+                VoiceprintLibraryPanel(
+                    store: voiceprintStore,
+                    pythonPath: settingsManager.pythonPath,
+                    scriptsDir: transcriber.bundleScriptsDir
+                )
             }
             .padding(24)
+        }
+    }
+
+    private func enrollVoiceprint(_ role: SpeakerRole) {
+        Task {
+            await voiceprintStore.enroll(
+                role: role,
+                audioURL: transcriber.currentAudioURL,
+                speakerMapURL: transcriber.currentSpeakerMapURL,
+                pythonPath: settingsManager.pythonPath,
+                scriptsDir: transcriber.bundleScriptsDir
+            )
         }
     }
 }
@@ -826,6 +853,7 @@ private struct SpeakerRolesCard: View {
     let roles: [SpeakerRole]
     var onChange: (String, String) -> Void
     var onApply: () -> Void
+    var onEnroll: (SpeakerRole) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -863,6 +891,21 @@ private struct SpeakerRolesCard: View {
                     .padding(8)
                     .background(Color(hex: "12121A"))
                     .cornerRadius(6)
+
+                    Button(action: { onEnroll(role) }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "waveform.badge.plus")
+                                .font(.system(size: 11))
+                            Text("加入声纹库")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(Color(hex: "4EC9B0"))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Color(hex: "4EC9B0").opacity(0.12))
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -870,6 +913,221 @@ private struct SpeakerRolesCard: View {
         .background(Color(hex: "1E1E2E"))
         .cornerRadius(12)
         .padding(.horizontal, 24)
+    }
+}
+
+private struct VoiceprintLibraryPanel: View {
+    @ObservedObject var store: VoiceprintStore
+    let pythonPath: String
+    let scriptsDir: URL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Image(systemName: "waveform.circle.fill")
+                    .foregroundColor(Color(hex: "4EC9B0"))
+                Text("本地声纹库")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(.white)
+                Spacer()
+                Button(action: {
+                    Task {
+                        await store.checkDependencies(pythonPath: pythonPath, scriptsDir: scriptsDir)
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checklist")
+                        Text(store.isWorking ? "检查中" : "检查依赖")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(hex: "4EC9B0").opacity(0.18))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isWorking)
+
+                Button(action: {
+                    NSWorkspace.shared.open(store.libraryDir)
+                }) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                        .padding(7)
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text("声纹库会保存用户确认过的角色样本。当前版本先建立样本和 profile；embedding 模型缺失时不会下载，后续安装模型后可用于自动匹配真实说话人。")
+                .font(.system(size: 11))
+                .foregroundColor(Color(hex: "A0A0B0"))
+
+            Text(store.libraryDir.path)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(Color(hex: "A0A0B0"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if let report = store.dependencyReport {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: report.ready ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                            .foregroundColor(report.ready ? Color(hex: "4EC9B0") : Color(hex: "F5A623"))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(report.ready ? "声纹模型依赖已就绪" : "声纹模型依赖缺失")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white)
+                            if !report.missing.isEmpty {
+                                Text(report.missing.joined(separator: ", "))
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(Color(hex: "A0A0B0"))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+
+                    if !report.dependencies.isEmpty {
+                        VStack(spacing: 6) {
+                            ForEach(report.dependencies) { dependency in
+                                VoiceprintDependencyRow(
+                                    dependency: dependency,
+                                    isWorking: store.isWorking,
+                                    installAction: {
+                                        store.installDependency(dependency, pythonPath: pythonPath)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color(hex: "12121A"))
+                .cornerRadius(8)
+            }
+
+            if !store.message.isEmpty {
+                Text(store.message)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+            }
+
+            if store.profiles.isEmpty {
+                Text("暂无声纹 profile。完成转写后，在角色命名卡中点击“加入声纹库”。")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(hex: "12121A"))
+                    .cornerRadius(8)
+            } else {
+                ForEach(store.profiles) { profile in
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.wave.2.fill")
+                            .foregroundColor(Color(hex: "4EC9B0"))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(profile.displayName)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.white)
+                            Text("\(profile.samples.count) 个样本 · \(profile.embeddingStatus)")
+                                .font(.system(size: 10))
+                                .foregroundColor(Color(hex: "A0A0B0"))
+                        }
+                        Spacer()
+                        if let count = profile.selectedSegmentCount {
+                            Text("\(count) 段")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Color(hex: "4EC9B0"))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color(hex: "4EC9B0").opacity(0.12))
+                                .cornerRadius(4)
+                        }
+                    }
+                    .padding(10)
+                    .background(Color(hex: "12121A"))
+                    .cornerRadius(8)
+                }
+            }
+        }
+        .padding(18)
+        .background(Color(hex: "1E1E2E").opacity(0.6))
+        .cornerRadius(12)
+    }
+}
+
+private struct VoiceprintDependencyRow: View {
+    let dependency: VoiceprintDependency
+    let isWorking: Bool
+    let installAction: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: dependency.ready ? "checkmark.circle.fill" : iconName)
+                .font(.system(size: 12))
+                .foregroundColor(dependency.ready ? Color(hex: "4EC9B0") : Color(hex: "F5A623"))
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dependency.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                Text(statusText)
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            if dependency.ready {
+                Text("已安装")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(Color(hex: "4EC9B0"))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Color(hex: "4EC9B0").opacity(0.12))
+                    .cornerRadius(5)
+            } else {
+                Button(action: installAction) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle")
+                        Text("安装")
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color(hex: "4EC9B0").opacity(0.18))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .disabled(isWorking)
+                .help(dependency.installCommand)
+            }
+        }
+        .padding(8)
+        .background(Color.white.opacity(0.04))
+        .cornerRadius(7)
+    }
+
+    private var iconName: String {
+        switch dependency.kind {
+        case "model":
+            return "cube.box"
+        case "system_binary":
+            return "terminal"
+        default:
+            return "shippingbox"
+        }
+    }
+
+    private var statusText: String {
+        if dependency.ready, let detectedPath = dependency.detectedPath, !detectedPath.isEmpty {
+            return detectedPath
+        }
+        return dependency.ready ? "可用" : dependency.description
     }
 }
 

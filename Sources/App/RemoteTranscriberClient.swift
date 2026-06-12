@@ -73,12 +73,13 @@ struct RemoteTranscriberClient: Sendable {
         self.decoder = JSONDecoder()
     }
 
-    func health(serviceURL: String, timeout: TimeInterval = 10) async throws -> VoiceScribeRemoteHealth {
+    func health(serviceURL: String, isRelay: Bool = false, timeout: TimeInterval = 10) async throws -> VoiceScribeRemoteHealth {
         let request = try authorizedRequest(
             serviceURL: serviceURL,
             path: "/v1/health",
             method: "GET",
-            timeout: timeout
+            timeout: timeout,
+            isRelay: isRelay
         )
         let health: VoiceScribeRemoteHealth = try await send(request)
         guard health.apiVersion == "1" else {
@@ -99,14 +100,17 @@ struct RemoteTranscriberClient: Sendable {
 
     func uploadAudio(
         at fileURL: URL,
-        serviceURL: String
+        serviceURL: String,
+        isRelay: Bool = false
     ) async throws -> VoiceScribeRemoteUpload {
         let boundary = "VoiceScribe-\(UUID().uuidString)"
+        let path = isRelay ? "/v1/uploads?service=voicescribe" : "/v1/uploads"
         var request = try authorizedRequest(
             serviceURL: serviceURL,
-            path: "/v1/uploads",
+            path: path,
             method: "POST",
-            timeout: 600 // 10 minutes timeout for big files
+            timeout: 600, // 10 minutes timeout for big files
+            isRelay: isRelay
         )
         request.setValue(
             "multipart/form-data; boundary=\(boundary)",
@@ -133,13 +137,15 @@ struct RemoteTranscriberClient: Sendable {
     func createTask(
         serviceURL: String,
         uploadID: String?,
-        arguments: [String: String]
+        arguments: [String: String],
+        isRelay: Bool = false
     ) async throws -> VoiceScribeRemoteTaskStatus {
         var request = try authorizedRequest(
             serviceURL: serviceURL,
             path: "/v1/tasks",
             method: "POST",
-            timeout: 10
+            timeout: 10,
+            isRelay: isRelay
         )
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
@@ -147,11 +153,14 @@ struct RemoteTranscriberClient: Sendable {
         let forbidden = ["voxcpm_root", "output_directory", "reference_audio_path", "audio_path", "out_dir"]
         let sanitized = arguments.filter { !forbidden.contains($0.key) }
         
-        let reqPayload = VoiceScribeRemoteTaskCreateRequest(
+        var reqPayload = VoiceScribeRemoteTaskCreateRequest(
             command: "transcribe",
             arguments: sanitized,
             uploadID: uploadID
         )
+        if isRelay {
+            reqPayload.service = "voicescribe"
+        }
         request.httpBody = try encoder.encode(reqPayload)
         
         return try await send(request)
@@ -159,13 +168,15 @@ struct RemoteTranscriberClient: Sendable {
 
     func taskStatus(
         taskID: String,
-        serviceURL: String
+        serviceURL: String,
+        isRelay: Bool = false
     ) async throws -> VoiceScribeRemoteTaskStatus {
         let request = try authorizedRequest(
             serviceURL: serviceURL,
             path: "/v1/tasks/\(taskID)",
             method: "GET",
-            timeout: 10
+            timeout: 10,
+            isRelay: isRelay
         )
         return try await send(request)
     }
@@ -173,13 +184,15 @@ struct RemoteTranscriberClient: Sendable {
     func downloadResult(
         taskID: String,
         index: Int,
-        serviceURL: String
+        serviceURL: String,
+        isRelay: Bool = false
     ) async throws -> (URL, HTTPURLResponse) {
         let request = try authorizedRequest(
             serviceURL: serviceURL,
             path: "/v1/tasks/\(taskID)/result/\(index)",
             method: "GET",
-            timeout: 300
+            timeout: 300,
+            isRelay: isRelay
         )
         let (fileURL, response) = try await transport.download(for: request)
         let http = try checkedHTTPResponse(response, data: nil)
@@ -188,13 +201,15 @@ struct RemoteTranscriberClient: Sendable {
 
     func deleteTask(
         taskID: String,
-        serviceURL: String
+        serviceURL: String,
+        isRelay: Bool = false
     ) async throws {
         let request = try authorizedRequest(
             serviceURL: serviceURL,
             path: "/v1/tasks/\(taskID)",
             method: "DELETE",
-            timeout: 10
+            timeout: 10,
+            isRelay: isRelay
         )
         let (data, response) = try await transport.data(for: request)
         _ = try checkedHTTPResponse(response, data: data)
@@ -216,9 +231,10 @@ struct RemoteTranscriberClient: Sendable {
         serviceURL: String,
         path: String,
         method: String,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        isRelay: Bool = false
     ) throws -> URLRequest {
-        let baseURL = try validatedBaseURL(serviceURL)
+        let baseURL = try validatedBaseURL(serviceURL, isRelay: isRelay)
         guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
             throw VoiceScribeRemoteClientError.invalidServiceURL
         }
@@ -231,16 +247,24 @@ struct RemoteTranscriberClient: Sendable {
         return request
     }
 
-    private func validatedBaseURL(_ value: String) throws -> URL {
+    private func validatedBaseURL(_ value: String, isRelay: Bool = false) throws -> URL {
         var normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if !normalizedValue.lowercased().hasPrefix("http://") && !normalizedValue.lowercased().hasPrefix("https://") {
-            normalizedValue = "http://" + normalizedValue
+            let isLocal = normalizedValue.hasPrefix("localhost") || normalizedValue.hasPrefix("127.0.0.1")
+            normalizedValue = (isLocal ? "http://" : "https://") + normalizedValue
         }
         
         guard let url = URL(string: normalizedValue),
               url.scheme == "http" || url.scheme == "https",
-              url.host != nil else {
+              let host = url.host else {
             throw VoiceScribeRemoteClientError.invalidServiceURL
+        }
+        
+        if isRelay {
+            let isLocal = host == "localhost" || host == "127.0.0.1"
+            if !isLocal && url.scheme != "https" {
+                throw VoiceScribeRemoteClientError.invalidServiceURL
+            }
         }
         
         return url
