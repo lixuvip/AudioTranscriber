@@ -75,6 +75,7 @@ struct SidebarView: View {
                 SidebarTabButton(title: "批量任务", icon: "queue.play.next", tab: .batchQueue, activeTab: $activeTab, badgeCount: 3)
                 SidebarTabButton(title: "交互校对", icon: "edit.note", tab: .editor, activeTab: $activeTab)
                 SidebarTabButton(title: "声纹库", icon: "person.wave.2", tab: .voiceprints, activeTab: $activeTab)
+                SidebarTabButton(title: "实时日志", icon: "terminal", tab: .logs, activeTab: $activeTab)
                 SidebarTabButton(title: "历史记录", icon: "history", tab: .history, activeTab: $activeTab)
                 SidebarTabButton(title: "环境与设置", icon: "settings", tab: .settings, activeTab: $activeTab)
             }

@@ -20,6 +20,10 @@ struct ContentView: View {
     @State private var summaryModelID: String = ""
     @State private var editingIndex: Int? = nil
     @State private var editingText: String = ""
+    @State private var speakerRoleFeedback: SpeakerRoleActionFeedback?
+    @State private var isApplyingSpeakerNames = false
+    @State private var enrollingVoiceprintRoleID: String?
+    @State private var enrolledVoiceprintRoleIDs: Set<String> = []
 
     private var outputDir: URL? {
         customOutputDir.isEmpty ? nil : URL(fileURLWithPath: customOutputDir)
@@ -34,6 +38,7 @@ struct ContentView: View {
         case batchQueue
         case editor
         case voiceprints
+        case logs
         case history
         case settings
     }
@@ -73,6 +78,9 @@ struct ContentView: View {
                                     .transition(.opacity)
                             case .voiceprints:
                                 voiceprintTab
+                                    .transition(.opacity)
+                            case .logs:
+                                logTab
                                     .transition(.opacity)
                             case .history:
                                 HistoryView(historyManager: historyManager, transcriber: transcriber, activeTab: $activeTab)
@@ -176,6 +184,12 @@ struct ContentView: View {
         }
         .onChange(of: transcriber.speakerRolesReady) { ready in
             if ready {
+                speakerRoleFeedback = nil
+                isApplyingSpeakerNames = false
+                enrollingVoiceprintRoleID = nil
+                enrolledVoiceprintRoleIDs = []
+            }
+            if ready && activeTab != .logs {
                 activeTab = .editor
             }
         }
@@ -249,6 +263,7 @@ struct ContentView: View {
         case .batchQueue: return "批量处理队列"
         case .editor: return "交互校对编辑器"
         case .voiceprints: return "声纹库"
+        case .logs: return "实时日志"
         case .history: return "转写历史库"
         case .settings: return "系统环境设置"
         }
@@ -345,11 +360,15 @@ struct ContentView: View {
                     if !transcriber.speakerRoles.isEmpty {
                         SpeakerRolesCard(
                             roles: transcriber.speakerRoles,
+                            feedback: speakerRoleFeedback,
+                            isApplying: isApplyingSpeakerNames,
+                            enrollingRoleID: enrollingVoiceprintRoleID,
+                            enrolledRoleIDs: enrolledVoiceprintRoleIDs,
                             onChange: { id, newName in
                                 transcriber.updateSpeakerRole(id: id, displayName: newName)
                             },
                             onApply: {
-                                transcriber.applySpeakerNames()
+                                applySpeakerNamesToOutput()
                             },
                             onEnroll: { role in
                                 enrollVoiceprint(role)
@@ -434,7 +453,14 @@ struct ContentView: View {
                 }
 
                 // Log Window
-                LogView(logs: transcriber.logs)
+                LogView(
+                    logs: transcriber.logs,
+                    currentProgress: transcriber.currentProgress,
+                    progress: transcriber.progress,
+                    isRunning: transcriber.isTranscribing || transcriber.isSummarizing,
+                    outputDir: transcriber.currentOutputDir,
+                    onClear: { transcriber.clearLogs() }
+                )
                     .frame(minHeight: 180)
                 
                 // Settings Panel inside Workspace for fast path tuning
@@ -519,6 +545,63 @@ struct ContentView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - Logs Tab
+
+    private var logTab: some View {
+        VStack(spacing: 14) {
+            LogView(
+                logs: transcriber.logs,
+                currentProgress: transcriber.currentProgress,
+                progress: transcriber.progress,
+                isRunning: transcriber.isTranscribing || transcriber.isSummarizing,
+                outputDir: transcriber.currentOutputDir,
+                onClear: { transcriber.clearLogs() }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            HStack(spacing: 10) {
+                statusPill(
+                    icon: "waveform.path.ecg",
+                    title: "阶段",
+                    value: transcriber.currentProgress.isEmpty ? "等待任务" : transcriber.currentProgress,
+                    color: "8E81F6"
+                )
+                statusPill(
+                    icon: "text.line.first.and.arrowtriangle.forward",
+                    title: "日志行",
+                    value: "\(transcriber.logs.count)",
+                    color: "4EC9B0"
+                )
+                if let eta = transcriber.estimatedTimeRemaining {
+                    statusPill(icon: "timer", title: "预计", value: eta, color: "F5A623")
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 18)
+        }
+        .padding(.top, 8)
+    }
+
+    private func statusPill(icon: String, title: String, value: String, color: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundColor(Color(hex: color))
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundColor(Color(hex: "A0A0B0"))
+            Text(value)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(7)
+    }
+
     // MARK: - Editor Tab (交互校对编辑器)
     
     private var editorTab: some View {
@@ -552,11 +635,15 @@ struct ContentView: View {
                                     if !transcriber.speakerRoles.isEmpty {
                                         SpeakerRolesCard(
                                             roles: transcriber.speakerRoles,
+                                            feedback: speakerRoleFeedback,
+                                            isApplying: isApplyingSpeakerNames,
+                                            enrollingRoleID: enrollingVoiceprintRoleID,
+                                            enrolledRoleIDs: enrolledVoiceprintRoleIDs,
                                             onChange: { id, newName in
                                                 transcriber.updateSpeakerRole(id: id, displayName: newName)
                                             },
                                             onApply: {
-                                                transcriber.applySpeakerNames()
+                                                applySpeakerNamesToOutput()
                                             },
                                             onEnroll: { role in
                                                 enrollVoiceprint(role)
@@ -666,18 +753,33 @@ struct ContentView: View {
                             .buttonStyle(.plain)
                         }
                     } else {
-                        Button(action: {
-                            editingIndex = index
-                            editingText = segment.text
-                        }) {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 10))
-                                .foregroundColor(Color(hex: "A0A0B0"))
-                                .padding(4)
-                                .background(Color.white.opacity(0.05))
-                                .clipShape(Circle())
+                        HStack(spacing: 8) {
+                            Button(action: {
+                                transcriber.playAudio(from: segment.start)
+                            }) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(Color(hex: "8E81F6"))
+                                    .frame(width: 20, height: 20)
+                                    .background(Color(hex: "8E81F6").opacity(0.14))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("从此段开始播放")
+
+                            Button(action: {
+                                editingIndex = index
+                                editingText = segment.text
+                            }) {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(Color(hex: "A0A0B0"))
+                                    .padding(4)
+                                    .background(Color.white.opacity(0.05))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -724,13 +826,24 @@ struct ContentView: View {
     // MARK: - Bottom Playback Control Bar
     
     private func BottomPlaybackControlBar() -> some View {
-        VStack(spacing: 8) {
+        let duration = max(transcriber.audioDuration, 0)
+        let sliderRange = 0...max(duration, 1)
+        let playbackPosition = Binding<Double>(
+            get: {
+                min(max(transcriber.currentPlaybackTime, 0), max(duration, 1))
+            },
+            set: { newValue in
+                transcriber.seekAudio(to: newValue)
+            }
+        )
+
+        return VStack(spacing: 8) {
             // Waveform
             WaveformVisualizer(isAnimating: transcriber.isAudioPlaying)
                 .padding(.horizontal, 8)
             
             // Audio Controls
-            HStack {
+            HStack(spacing: 14) {
                 HStack(spacing: 16) {
                     // Playback toggles
                     Button(action: {
@@ -752,8 +865,25 @@ struct ContentView: View {
                             .foregroundColor(Color(hex: "A0A0B0"))
                     }
                 }
-                
-                Spacer()
+
+                HStack(spacing: 8) {
+                    Text(formatDuration(transcriber.currentPlaybackTime))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                        .frame(width: 42, alignment: .trailing)
+
+                    Slider(value: playbackPosition, in: sliderRange)
+                        .tint(Color(hex: "8E81F6"))
+                        .disabled(duration <= 0)
+                        .help("拖动跳转播放位置")
+                        .frame(minWidth: 180)
+
+                    Text(formatDuration(duration))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                        .frame(width: 42, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity)
                 
                 // Speed selection
                 HStack(spacing: 4) {
@@ -847,22 +977,70 @@ struct ContentView: View {
     }
 
     private func enrollVoiceprint(_ role: SpeakerRole) {
-        Task {
-            await voiceprintStore.enroll(
+        guard enrollingVoiceprintRoleID == nil else { return }
+        let displayName = role.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let speakerName = displayName.isEmpty ? role.placeholder : displayName
+        enrollingVoiceprintRoleID = role.id
+        speakerRoleFeedback = SpeakerRoleActionFeedback(
+            message: "正在将 \(speakerName) 加入声纹库...",
+            kind: .info
+        )
+
+        Task { @MainActor in
+            let result = await voiceprintStore.enroll(
                 role: role,
                 audioURL: transcriber.currentAudioURL,
                 speakerMapURL: transcriber.currentSpeakerMapURL,
                 pythonPath: settingsManager.pythonPath,
                 scriptsDir: transcriber.bundleScriptsDir
             )
+            enrollingVoiceprintRoleID = nil
+            if result.success {
+                enrolledVoiceprintRoleIDs.insert(role.id)
+            }
+            speakerRoleFeedback = SpeakerRoleActionFeedback(
+                message: result.message,
+                kind: result.success ? .success : .error
+            )
         }
+    }
+
+    private func applySpeakerNamesToOutput() {
+        guard !isApplyingSpeakerNames else { return }
+        isApplyingSpeakerNames = true
+        speakerRoleFeedback = SpeakerRoleActionFeedback(
+            message: "正在重写整理版文本...",
+            kind: .info
+        )
+
+        let result = transcriber.applySpeakerNames()
+        isApplyingSpeakerNames = false
+        speakerRoleFeedback = SpeakerRoleActionFeedback(
+            message: result.message,
+            kind: result.success ? .success : .error
+        )
     }
 }
 
 // MARK: - Core components definitions copies for completeness
 
+private enum SpeakerRoleActionFeedbackKind {
+    case info
+    case success
+    case error
+}
+
+private struct SpeakerRoleActionFeedback {
+    let message: String
+    let kind: SpeakerRoleActionFeedbackKind
+}
+
 private struct SpeakerRolesCard: View {
     let roles: [SpeakerRole]
+    let feedback: SpeakerRoleActionFeedback?
+    let isApplying: Bool
+    let enrollingRoleID: String?
+    let enrolledRoleIDs: Set<String>
     var onChange: (String, String) -> Void
     var onApply: () -> Void
     var onEnroll: (SpeakerRole) -> Void
@@ -876,10 +1054,22 @@ private struct SpeakerRolesCard: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
-                Button("应用到整理版") {
+                Button(action: {
                     onApply()
+                }) {
+                    HStack(spacing: 6) {
+                        if isApplying {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 11))
+                        }
+                        Text(isApplying ? "应用中" : "应用到整理版")
+                    }
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(isApplying)
             }
 
             Text("转写后会先生成角色A、角色B、角色C。你可以在这里改成真实姓名或身份，整理版文本和后续摘要都会优先使用这些名称。")
@@ -887,6 +1077,8 @@ private struct SpeakerRolesCard: View {
                 .foregroundColor(Color(hex: "A0A0B0"))
 
             ForEach(roles) { role in
+                let isEnrolling = enrollingRoleID == role.id
+                let isEnrolled = enrolledRoleIDs.contains(role.id)
                 HStack(spacing: 10) {
                     Text(role.placeholder)
                         .font(.system(size: 12, weight: .medium))
@@ -906,25 +1098,63 @@ private struct SpeakerRolesCard: View {
 
                     Button(action: { onEnroll(role) }) {
                         HStack(spacing: 4) {
-                            Image(systemName: "waveform.badge.plus")
-                                .font(.system(size: 11))
-                            Text("加入声纹库")
-                                .font(.system(size: 11, weight: .medium))
+                            if isEnrolling {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: isEnrolled ? "checkmark.circle.fill" : "waveform.badge.plus")
+                                    .font(.system(size: 11))
+                            }
+                            Text(isEnrolling ? "加入中" : (isEnrolled ? "已加入" : "加入声纹库"))
+                                .font(.system(size: 11, weight: .semibold))
                         }
-                        .foregroundColor(Color(hex: "4EC9B0"))
+                        .foregroundColor(isEnrolled ? Color(hex: "8E81F6") : Color(hex: "4EC9B0"))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
-                        .background(Color(hex: "4EC9B0").opacity(0.12))
+                        .background((isEnrolled ? Color(hex: "8E81F6") : Color(hex: "4EC9B0")).opacity(0.12))
                         .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
+                    .disabled(isEnrolling || enrollingRoleID != nil)
                 }
+            }
+
+            if let feedback {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: feedbackIcon(for: feedback.kind))
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(feedback.message)
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundColor(feedbackColor(for: feedback.kind))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(feedbackColor(for: feedback.kind).opacity(0.12))
+                .cornerRadius(8)
             }
         }
         .padding(16)
         .background(Color(hex: "1E1E2E"))
         .cornerRadius(12)
         .padding(.horizontal, 24)
+    }
+
+    private func feedbackIcon(for kind: SpeakerRoleActionFeedbackKind) -> String {
+        switch kind {
+        case .info: return "clock.arrow.circlepath"
+        case .success: return "checkmark.seal.fill"
+        case .error: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func feedbackColor(for kind: SpeakerRoleActionFeedbackKind) -> Color {
+        switch kind {
+        case .info: return Color(hex: "8E81F6")
+        case .success: return Color(hex: "4EC9B0")
+        case .error: return Color(hex: "F14C4C")
+        }
     }
 }
 

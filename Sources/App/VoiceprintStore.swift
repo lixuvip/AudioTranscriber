@@ -115,6 +115,11 @@ struct VoiceprintDependency: Codable, Identifiable, Equatable {
     let envOverride: String?
 }
 
+struct VoiceprintOperationResult: Equatable {
+    let success: Bool
+    let message: String
+}
+
 @MainActor
 final class VoiceprintStore: ObservableObject {
     @Published var profiles: [VoiceprintProfile] = []
@@ -355,15 +360,17 @@ final class VoiceprintStore: ObservableObject {
         speakerMapURL: URL?,
         pythonPath: String,
         scriptsDir: URL
-    ) async {
+    ) async -> VoiceprintOperationResult {
         guard let audioURL, let speakerMapURL else {
-            message = "缺少音频或 speaker_map，无法加入声纹库"
-            return
+            let result = VoiceprintOperationResult(success: false, message: "缺少音频或 speaker_map，无法加入声纹库")
+            message = result.message
+            return result
         }
         let resolvedPython = voiceprintPythonPath(fallback: pythonPath)
         guard !resolvedPython.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            message = "请先选择 Python 环境"
-            return
+            let result = VoiceprintOperationResult(success: false, message: "请先选择 Python 环境")
+            message = result.message
+            return result
         }
 
         let displayName = role.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -388,9 +395,13 @@ final class VoiceprintStore: ObservableObject {
                 ]
             )
             load()
-            message = "已将 \(speakerName) 的样本加入声纹库"
+            let result = VoiceprintOperationResult(success: true, message: "已将 \(speakerName) 的样本加入声纹库")
+            message = result.message
+            return result
         } catch {
-            message = "加入声纹库失败：\(error.localizedDescription)"
+            let result = VoiceprintOperationResult(success: false, message: "加入声纹库失败：\(error.localizedDescription)")
+            message = result.message
+            return result
         }
     }
 
