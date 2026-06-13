@@ -3,6 +3,17 @@ import Combine
 import Darwin
 import AVFoundation
 
+struct SpeakerNameApplyResult: Equatable {
+    let success: Bool
+    let message: String
+}
+
+private struct SpeakerNameApplyError: LocalizedError {
+    let message: String
+
+    var errorDescription: String? { message }
+}
+
 @MainActor
 class Transcriber: ObservableObject {
     @Published var isAudioPlaying = false
@@ -35,6 +46,7 @@ class Transcriber: ObservableObject {
 
     private var currentTask: Process?
     private var didRequestStop = false
+    private var lastLoggedProgressStage = ""
     @Published var currentTranscriptSegments: [TranscriptSegment] = []
     @Published var currentTranscriptTitle: String = ""
     private var transcriptionStartTime: Date?
@@ -77,6 +89,7 @@ class Transcriber: ObservableObject {
         let outDir = outputDir ?? audioURL.deletingLastPathComponent()
 
         didRequestStop = false
+        lastLoggedProgressStage = ""
         currentAudioURL = audioURL
         isAudioPlaying = false
         currentPlaybackTime = 0
@@ -197,6 +210,11 @@ class Transcriber: ObservableObject {
         process.standardError = outputPipe
         process.standardInput = FileHandle.nullDevice
         currentTask = process
+
+        appendLog("[VoiceScribe] 启动本地转写：\(engine.title)")
+        appendLog("[VoiceScribe] 模型：\(modelID.isEmpty ? engine.defaultModelID : modelID)")
+        appendLog("[VoiceScribe] 设备：\(effectiveProfile.device.uppercased())，线程：\(effectiveProfile.threads)，batch：\(effectiveProfile.batchSizeSeconds)s")
+        appendLog("[VoiceScribe] 多说话人识别：\(speakerDiarizationEnabled ? "开启" : "关闭")")
 
         outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -375,6 +393,7 @@ class Transcriber: ObservableObject {
                         self.appendLog("远程转写任务执行成功，开始下载结果文件...")
                         self.currentProgress = "正在下载结果..."
                         self.updateStageIndex(for: "下载")
+                        var downloadedResultURLs: [String: URL] = [:]
                         
                         for file in status.results {
                             let (tempURL, _) = try await client.downloadResult(
@@ -389,6 +408,7 @@ class Transcriber: ObservableObject {
                             }
                             try FileManager.default.moveItem(at: tempURL, to: destURL)
                             self.appendLog("已下载产物: \(file.filename)")
+                            downloadedResultURLs[Self.remoteResultCategory(for: file)] = destURL
                         }
                         
                         self.currentProgress = "完成 ✓"
@@ -396,9 +416,13 @@ class Transcriber: ObservableObject {
                         self.progress = 1.0
                         self.appendLog("✓ 所有产物下载并保存成功。")
                         
-                        self.currentTranscriptURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_通话记录.md")
-                        self.currentSpeakerMapURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_speaker_map.json")
-                        self.currentSpeakerTextURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_整理版.md")
+                        let baseName = audioURL.deletingPathExtension().lastPathComponent
+                        self.currentTranscriptURL = downloadedResultURLs["transcript"]
+                            ?? outDir.appendingPathComponent("\(baseName)_通话记录.md")
+                        self.currentSpeakerMapURL = downloadedResultURLs["speaker_map"]
+                            ?? outDir.appendingPathComponent("\(baseName)_speaker_map.json")
+                        self.currentSpeakerTextURL = downloadedResultURLs["speaker_text"]
+                            ?? outDir.appendingPathComponent("\(baseName)_整理版.md")
 
                         if engine.usesVoiceprintLibrary {
                             self.currentProgress = "声纹库匹配..."
@@ -434,13 +458,36 @@ class Transcriber: ObservableObject {
         }
     }
 
+    private static func remoteResultCategory(for file: VoiceScribeRemoteTaskResultFile) -> String {
+        if !file.category.isEmpty {
+            return file.category
+        }
+        if file.filename.hasSuffix("_通话记录.md") {
+            return "transcript"
+        }
+        if file.filename.hasSuffix("_整理版.md") {
+            return "speaker_text"
+        }
+        if file.filename.hasSuffix("_speaker_map.json") {
+            return "speaker_map"
+        }
+        return "artifact"
+    }
+
     private func statusTitle(for status: String) -> String {
         switch status {
+        case "idle": return "空闲"
         case "queued": return "排队中..."
+        case "claimed": return "Worker 已接单..."
+        case "downloading_input": return "Worker 正在下载输入..."
+        case "uploading_to_local": return "Worker 正在上传到本地服务..."
         case "preparing": return "准备中..."
         case "running": return "转写中..."
+        case "uploading_results": return "Worker 正在上传结果..."
+        case "downloading": return "下载中..."
         case "completed": return "完成 ✓"
         case "failed": return "失败 ✗"
+        case "cancelled": return "已取消"
         default: return "运行中..."
         }
     }
@@ -527,6 +574,7 @@ class Transcriber: ObservableObject {
         isSummarizing = true
         isTranscribing = false
         logs = []
+        lastLoggedProgressStage = ""
         progress = 0
         currentProgress = "生成摘要..."
 
@@ -618,8 +666,15 @@ class Transcriber: ObservableObject {
                 if let stage = dict["stage"] as? String {
                     currentProgress = stage
                     updateStageIndex(for: stage)
+                    appendProgressLog(stage: stage, percent: dict["percent"] as? Double)
                 }
                 updateETA()
+            case "log":
+                let level = dict["level"] as? String ?? "info"
+                let message = dict["message"] as? String ?? ""
+                if !message.isEmpty {
+                    appendLog("[\(level.uppercased())] \(message)")
+                }
             case "duration":
                 if let total = dict["total_seconds"] as? Double {
                     audioDurationSeconds = total
@@ -636,6 +691,16 @@ class Transcriber: ObservableObject {
             default:
                 break
             }
+        }
+    }
+
+    private func appendProgressLog(stage: String, percent: Double?) {
+        guard stage != lastLoggedProgressStage else { return }
+        lastLoggedProgressStage = stage
+        if let percent {
+            appendLog(String(format: "[进度] %.0f%% %@", percent, stage))
+        } else {
+            appendLog("[进度] \(stage)")
         }
     }
 
@@ -840,7 +905,18 @@ class Transcriber: ObservableObject {
 
     private func appendLog(_ line: String) {
         if logs.count > 500 { logs.removeFirst() }
-        logs.append(line)
+        logs.append("[\(Self.logTimestamp())] \(line)")
+    }
+
+    func clearLogs() {
+        logs = []
+        lastLoggedProgressStage = ""
+    }
+
+    private static func logTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: Date())
     }
 
     private func createHistoryEntry() {
@@ -873,7 +949,7 @@ class Transcriber: ObservableObject {
             SpeakerRole(key: $0.key, placeholder: $0.placeholder, displayName: $0.displayName)
         }
         speakerRolesReady = !speakerRoles.isEmpty
-        rebuildSpeakerText()
+        _ = try? rebuildSpeakerText()
         initializeAudioPlayer()
         loadSummaryIfExists()
     }
@@ -892,16 +968,30 @@ class Transcriber: ObservableObject {
     func updateSpeakerRole(id: String, displayName: String) {
         guard let index = speakerRoles.firstIndex(where: { $0.id == id }) else { return }
         speakerRoles[index].displayName = displayName
-        rebuildSpeakerText()
+        _ = try? rebuildSpeakerText()
     }
 
-    func applySpeakerNames() {
-        rebuildSpeakerText()
-        appendLog("已更新角色名称并重写正文")
+    @discardableResult
+    func applySpeakerNames() -> SpeakerNameApplyResult {
+        do {
+            let speakerTextURL = try rebuildSpeakerText()
+            let message = "已应用到整理版：\(speakerTextURL.lastPathComponent)"
+            appendLog("[VoiceScribe] \(message)")
+            return SpeakerNameApplyResult(success: true, message: message)
+        } catch {
+            let message = "应用到整理版失败：\(error.localizedDescription)"
+            appendLog("✗ \(message)")
+            return SpeakerNameApplyResult(success: false, message: message)
+        }
     }
 
-    private func rebuildSpeakerText() {
-        guard let speakerTextURL = currentSpeakerTextURL else { return }
+    private func rebuildSpeakerText() throws -> URL {
+        guard let speakerTextURL = currentSpeakerTextURL else {
+            throw SpeakerNameApplyError(message: "缺少整理版输出文件路径")
+        }
+        guard !currentTranscriptSegments.isEmpty else {
+            throw SpeakerNameApplyError(message: "当前没有可写入的转写片段")
+        }
         let nameMap = Dictionary(uniqueKeysWithValues: speakerRoles.map {
             ($0.placeholder, $0.displayName.isEmpty ? $0.placeholder : $0.displayName)
         })
@@ -913,7 +1003,8 @@ class Transcriber: ObservableObject {
             lines.append("[\(start)] 【\(speakerName)】 \(segment.text)")
         }
 
-        try? lines.joined(separator: "\n").write(to: speakerTextURL, atomically: true, encoding: .utf8)
+        try lines.joined(separator: "\n").write(to: speakerTextURL, atomically: true, encoding: .utf8)
+        return speakerTextURL
     }
 
     private func timestamp(from seconds: Double) -> String {
@@ -1076,6 +1167,20 @@ class Transcriber: ObservableObject {
         let targetTime = max(0, min(seconds, player.duration))
         player.currentTime = targetTime
         currentPlaybackTime = targetTime
+    }
+
+    func playAudio(from seconds: Double) {
+        if audioPlayer == nil && currentAudioURL != nil {
+            initializeAudioPlayer()
+        }
+        guard let player = audioPlayer else { return }
+        let targetTime = max(0, min(seconds, player.duration))
+        player.currentTime = targetTime
+        player.rate = Float(playbackSpeed)
+        player.play()
+        currentPlaybackTime = targetTime
+        isAudioPlaying = true
+        startPlaybackTimer()
     }
 
     func setAudioPlaybackSpeed(_ speed: Double) {
@@ -1290,7 +1395,7 @@ class Transcriber: ObservableObject {
         }
         
         // 2. Rebuild _整理版.md (uses display names)
-        rebuildSpeakerText()
+        _ = try? rebuildSpeakerText()
         
         // 3. Rebuild _通话记录.md (uses placeholders)
         rebuildTranscriptText()

@@ -12,6 +12,15 @@ from .database import Database
 from .config import Settings
 
 
+def _subprocess_env(arguments: dict[str, Any]) -> dict[str, str]:
+    env = os.environ.copy()
+    hf_token = str(arguments.get("hf_token") or "").strip()
+    if hf_token:
+        env["HF_TOKEN"] = hf_token
+        env["HUGGING_FACE_HUB_TOKEN"] = hf_token
+    return env
+
+
 class TaskWorker:
     def __init__(self, database: Database, settings: Settings, output_root: Path) -> None:
         self.database = database
@@ -96,6 +105,7 @@ class TaskWorker:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                env=_subprocess_env(arguments),
                 text=True,
                 bufsize=1,
                 universal_newlines=True

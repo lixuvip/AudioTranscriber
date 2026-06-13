@@ -271,7 +271,7 @@ struct SettingsPanel: View {
                                 .foregroundColor(Color(hex: "A0A0B0"))
                                 .frame(width: 60, alignment: .leading)
                             
-                            TextField("https://api.example.com", text: $settingsManager.relayServiceURL)
+                            TextField("https://all-serves.openclaw-mini.cn", text: $settingsManager.relayServiceURL)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundColor(.white)

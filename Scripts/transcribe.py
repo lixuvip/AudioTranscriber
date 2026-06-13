@@ -9,6 +9,9 @@ import argparse
 import subprocess
 import tempfile
 import shutil
+import threading
+import importlib
+import inspect
 
 parser = argparse.ArgumentParser()
 parser.add_argument("audio_path")
@@ -42,16 +45,6 @@ os.environ["NUMEXPR_NUM_THREADS"] = str(threads)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["PYTHONUNBUFFERED"] = "1"
 
-# 限制 PyTorch 线程（如果安装了 torch）
-try:
-    import torch
-    torch.set_num_threads(threads)
-    torch.set_num_interop_threads(threads)
-    print(f"[VoiceScribe] PyTorch 线程限制为 {threads}")
-except ImportError:
-    pass
-
-
 # ---- 结构化进度输出 ----
 def emit_progress(stage, percent, processed_seconds=0, total_seconds=0):
     """输出 JSON 格式的进度信息供 Swift 端解析"""
@@ -82,6 +75,134 @@ def emit_error(code, message, suggestion=""):
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
+def emit_log(message, level="info"):
+    """输出结构化日志信息供 Swift 端实时显示"""
+    payload = {
+        "type": "log",
+        "level": level,
+        "message": message,
+    }
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def format_seconds(seconds):
+    seconds = max(0, int(seconds))
+    minutes, sec = divmod(seconds, 60)
+    if minutes:
+        return f"{minutes}分{sec:02d}秒"
+    return f"{sec}秒"
+
+
+def emit_qwen3_progress(event):
+    """把 mlx-qwen3-asr 的内部进度转换为 VoiceScribe 进度与日志。"""
+    name = str(event.get("event", "progress"))
+    total_chunks = int(event.get("total_chunks") or event.get("file_total") or 1)
+    chunk_index = int(event.get("chunk_index") or event.get("file_index") or 0)
+    audio_total = float(event.get("audio_duration_sec") or audio_duration or 0)
+    processed = float(event.get("processed_audio_sec") or 0)
+    raw_progress = float(event.get("progress") or 0)
+    percent = 25 + min(max(raw_progress, 0), 1) * 63
+
+    if name == "batch_file_started":
+        emit_log(f"Qwen3-ASR 开始处理音频文件 {chunk_index}/{total_chunks}")
+    elif name == "chunks_prepared":
+        emit_progress(f"Qwen3-ASR 已切分 {total_chunks} 个音频块", 28, 0, audio_total)
+        emit_log(f"Qwen3-ASR 已切分为 {total_chunks} 个音频块，开始 MLX 转写")
+    elif name == "chunk_started":
+        emit_progress(f"Qwen3-ASR 转写音频块 {chunk_index}/{total_chunks}", percent, processed, audio_total)
+        emit_log(f"Qwen3-ASR 正在转写音频块 {chunk_index}/{total_chunks}")
+    elif name == "chunk_completed":
+        emit_progress(f"Qwen3-ASR 完成音频块 {chunk_index}/{total_chunks}", percent, processed, audio_total)
+        emit_log(f"Qwen3-ASR 已完成音频块 {chunk_index}/{total_chunks}")
+    elif name == "diarization_completed":
+        count = int(event.get("speaker_segment_count") or 0)
+        emit_progress("pyannote 说话人分离完成", 90, audio_total, audio_total)
+        emit_log(f"pyannote 说话人分离完成，得到 {count} 个说话人片段")
+    elif name == "completed":
+        emit_progress("Qwen3-ASR 转写完成", 92, audio_total, audio_total)
+        emit_log("Qwen3-ASR 全流程完成，开始解析结果")
+    else:
+        emit_log(f"Qwen3-ASR 进度事件: {name}")
+
+
+def install_qwen3_diarization_logging(qwen3_module, total_seconds):
+    """为 mlx-qwen3-asr 的 pyannote 阶段补充开始、心跳和完成日志。"""
+    original_infer = getattr(qwen3_module, "infer_speaker_turns", None)
+    if not callable(original_infer) or getattr(original_infer, "_voicescribe_logged", False):
+        return
+
+    def wrapped_infer_speaker_turns(audio, *, sr, config, _pipeline=None):
+        audio_seconds = float(len(audio) / sr) if sr else float(total_seconds or 0)
+        min_speakers = getattr(config, "min_speakers", 1)
+        max_speakers = getattr(config, "max_speakers", 8)
+        fixed_speakers = getattr(config, "num_speakers", None)
+        speaker_hint = f"固定 {fixed_speakers} 人" if fixed_speakers else f"{min_speakers}-{max_speakers} 人"
+        started_at = time.time()
+        stop_event = threading.Event()
+        try:
+            heartbeat_seconds = float(os.environ.get("VOICESCRIBE_DIARIZATION_HEARTBEAT_SECONDS", "15"))
+        except ValueError:
+            heartbeat_seconds = 15.0
+        heartbeat_seconds = max(0.1, heartbeat_seconds)
+
+        emit_progress("pyannote 说话人分离中...", 89, 0, audio_seconds)
+        emit_log(
+            "pyannote 说话人分离开始："
+            f"音频 {format_seconds(audio_seconds)}，说话人范围 {speaker_hint}；"
+            "该阶段会执行 VAD、声纹 embedding 与聚类，主要使用 CPU"
+        )
+
+        def heartbeat():
+            while not stop_event.wait(heartbeat_seconds):
+                elapsed = time.time() - started_at
+                emit_progress(f"pyannote 说话人分离中... 已耗时 {format_seconds(elapsed)}", 89, 0, audio_seconds)
+                emit_log(
+                    "pyannote 仍在运行："
+                    f"已耗时 {format_seconds(elapsed)}，正在执行 VAD/embedding/聚类；"
+                    "长音频或说话人较多时 CPU 占用会较高"
+                )
+
+        monitor = threading.Thread(target=heartbeat, daemon=True)
+        monitor.start()
+        try:
+            turns = original_infer(audio, sr=sr, config=config, _pipeline=_pipeline)
+        finally:
+            stop_event.set()
+
+        elapsed = time.time() - started_at
+        speakers = sorted({str(turn.get("speaker", "")) for turn in turns if turn.get("speaker")})
+        emit_log(
+            "pyannote pipeline 完成："
+            f"耗时 {format_seconds(elapsed)}，speaker turn {len(turns)} 个，"
+            f"检测到 {len(speakers)} 个说话人标签"
+        )
+        emit_progress("pyannote 正在合并说话人片段...", 90, audio_seconds, audio_seconds)
+        return turns
+
+    wrapped_infer_speaker_turns._voicescribe_logged = True
+    qwen3_module.infer_speaker_turns = wrapped_infer_speaker_turns
+
+
+def call_qwen3_transcribe(qwen3_transcribe, audio_path, **kwargs):
+    """Call mlx-qwen3-asr while tolerating versions without optional callbacks."""
+    try:
+        signature = inspect.signature(qwen3_transcribe)
+        parameters = signature.parameters
+        accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        if not accepts_kwargs:
+            kwargs = {
+                key: value
+                for key, value in kwargs.items()
+                if key in parameters
+            }
+    except (TypeError, ValueError):
+        pass
+    return qwen3_transcribe(audio_path, **kwargs)
+
+
 def get_audio_duration(path):
     """使用 ffprobe 获取音频时长（秒）"""
     try:
@@ -94,6 +215,25 @@ def get_audio_duration(path):
         return duration
     except Exception:
         return None
+
+
+def validate_input_audio(path):
+    """在进入 ffmpeg / 模型加载前校验输入音频，避免底层错误淹没有效提示。"""
+    if not os.path.isfile(path):
+        emit_error(
+            "input_file_missing",
+            f"输入音频文件不存在: {path}",
+            "请重新选择音频文件；如果文件在 iCloud、外接盘或移动硬盘，请确认文件已下载且磁盘已连接",
+        )
+        sys.exit(1)
+
+    if not os.access(path, os.R_OK):
+        emit_error(
+            "input_file_unreadable",
+            f"输入音频文件不可读取: {path}",
+            "请检查文件权限，或把文件复制到本地目录后重新选择",
+        )
+        sys.exit(1)
 
 
 def role_name_from_index(index):
@@ -334,6 +474,9 @@ def format_qwen3_markdown(result, diarize_enabled):
 
 def prepare_audio(source_path):
     """将所有音频统一转为 16kHz 单声道 WAV，确保转写引擎能可靠处理。"""
+    if not os.path.isfile(source_path):
+        raise RuntimeError(f"输入音频文件不存在: {source_path}")
+
     suffix = os.path.splitext(source_path)[1].lower()
     if suffix in [".wav", ".wave"]:
         # 验证是否是 16kHz 单声道，不是则需要转换
@@ -371,6 +514,17 @@ def prepare_audio(source_path):
         raise RuntimeError("ffmpeg 转换超时（120s），请检查音频文件是否完整")
     return converted_path, temp_dir
 
+
+validate_input_audio(audio_path)
+
+# 限制 PyTorch 线程（如果安装了 torch）。放在输入校验之后，避免无效路径还触发重依赖初始化。
+try:
+    import torch
+    torch.set_num_threads(threads)
+    torch.set_num_interop_threads(threads)
+    print(f"[VoiceScribe] PyTorch 线程限制为 {threads}")
+except ImportError:
+    pass
 
 print(f"[VoiceScribe] 音频: {audio_path}")
 print(f"[VoiceScribe] 输出: {out_dir}")
@@ -436,32 +590,41 @@ elif args.engine == "qwen3ASR":
             dtype = dtype_map.get(dtype_str, mx.float16)
 
     try:
-        from mlx_qwen3_asr.transcribe import transcribe as qwen3_transcribe
+        qwen3_module = importlib.import_module("mlx_qwen3_asr.transcribe")
+        qwen3_transcribe = qwen3_module.transcribe
     except ModuleNotFoundError:
         emit_error("missing_dependency", "Qwen3-ASR not installed: pip install mlx-qwen3-asr", "Install deps in settings")
         sys.exit(1)
 
     use_diarize = args.speaker_diarization != "0"
+    if use_diarize:
+        install_qwen3_diarization_logging(qwen3_module, audio_duration or 0)
     emit_progress(f"Loading Qwen3-ASR {model_id}...", 15, 0, audio_duration or 0)
 
     try:
         emit_progress(f"Qwen3-ASR transcribing dtype={dtype_str} diarize={use_diarize}...", 25, 0, audio_duration or 0)
-        result = qwen3_transcribe(
+        result = call_qwen3_transcribe(
+            qwen3_transcribe,
             prepared_audio_path,
             model=model_id,
             dtype=dtype,
             diarize=use_diarize,
+            verbose=True,
+            on_progress=emit_qwen3_progress,
         )
     except Exception as e:
         if use_diarize and ("pyannote" in str(e).lower() or "diariz" in str(e).lower()):
             emit_progress("pyannote not available, retrying without diarization...", 30, 0, audio_duration or 0)
             use_diarize = False
             try:
-                result = qwen3_transcribe(
+                result = call_qwen3_transcribe(
+                    qwen3_transcribe,
                     prepared_audio_path,
                     model=model_id,
                     dtype=dtype,
                     diarize=False,
+                    verbose=True,
+                    on_progress=emit_qwen3_progress,
                 )
             except Exception as e2:
                 emit_error("transcription_failed", f"Qwen3-ASR error: {e2}", "Check deps and model installation")

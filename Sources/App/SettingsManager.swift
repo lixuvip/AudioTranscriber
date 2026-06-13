@@ -265,7 +265,7 @@ class SettingsManager: ObservableObject {
         executionTarget = savedExecutionTarget
         remoteServiceURL = UserDefaults.standard.string(forKey: "remoteServiceURL") ?? "http://192.168.3.79:8766"
         remoteTailscaleURL = UserDefaults.standard.string(forKey: "remoteTailscaleURL") ?? ""
-        relayServiceURL = UserDefaults.standard.string(forKey: "relayServiceURL") ?? "https://api.example.com"
+        relayServiceURL = UserDefaults.standard.string(forKey: "relayServiceURL") ?? "https://all-serves.openclaw-mini.cn"
         remoteAvailableEngines = [.vibeVoiceMLX, .funASR, .qwen3ASR]
         
         if UserDefaults.standard.object(forKey: "speakerDiarizationEnabled") == nil {
