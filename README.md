@@ -1,6 +1,6 @@
 # VoiceScribe
 
-macOS 本地音频转写工具。支持 FunASR + cam++、VibeVoice MLX 和 Qwen3-ASR 三引擎，自动说话人分离，LLM 摘要生成，转写历史管理。所有处理均在本地完成，不上传音频到第三方服务。
+macOS 本地优先音频转写工具。支持 FunASR + cam++、VibeVoice MLX 和 Qwen3-ASR 三引擎，自动说话人分离，LLM 摘要生成，转写历史管理。默认在本机处理音频；也可以显式切换到自有 Mac mini VoiceScribe Server 或 All Service / AllServes relay。
 
 ## 依赖的开源项目
 
@@ -46,6 +46,7 @@ macOS 本地音频转写工具。支持 FunASR + cam++、VibeVoice MLX 和 Qwen3
 ### 转写
 
 - 三引擎：`FunASR + cam++`（稳定中文转写 + 说话人区分）、`VibeVoice MLX`（Apple Silicon 加速）、`Qwen3-ASR`（中文方言之王，8/4-bit 量化）。
+- 执行目标：本机、直连 Mac mini VoiceScribe Server、All Service / AllServes relay。远程接口契约见 `docs/remote_allserves_integration.md`。
 - 拖拽或选择音频文件，支持 m4a、mp3、wav、mp4、mov、aac、flac。
 - 非 WAV 格式自动通过 ffmpeg 转为 16kHz 单声道 WAV 再转写。
 - 转写结果输出：原始 JSON、通话记录 Markdown、整理版文本、说话人映射 JSON。
@@ -226,6 +227,8 @@ ditto -c -k --sequesterRsrc --keepParent dist/VoiceScribe.app dist/VoiceScribe-m
 - Python 虚拟环境或模型缓存
 
 排除规则已写入 `.gitignore`。
+
+远程模式仅在用户显式选择远程 Mac mini 或 AllServes relay 时上传音频到对应自有服务。Hugging Face token 只作为运行参数传递给本机或服务端子进程，不应写入日志、文档或提交；模型、pyannote 和声纹模型依赖保持用户手动配置与验证，不由自动测试下载。
 
 ## 许可
 

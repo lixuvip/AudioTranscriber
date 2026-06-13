@@ -4,10 +4,10 @@
 
 **名称:** VoiceScribe
 **Bundle Identifier:** com.voicescribe.app
-**Core Functionality:** 本地音频转写工具，支持 FunASR / VibeVoice MLX / Qwen3-ASR 三引擎、自动说话人分离、LLM 摘要、AI 洞察
+**Core Functionality:** 本地优先音频转写工具，支持 FunASR / VibeVoice MLX / Qwen3-ASR 三引擎、自动说话人分离、LLM 摘要、AI 洞察，以及可选 Mac mini VoiceScribe Server / AllServes relay 远程执行
 **Target Users:** 需要转录会议、访谈、播客的用户
 **macOS Version:** macOS 13.0+
-**Architecture:** SwiftUI (View) + Python (Backend via Process)
+**Architecture:** SwiftUI (View) + Python (Backend via Process) + optional FastAPI-style VoiceScribe Server
 
 ---
 
@@ -127,6 +127,16 @@
 - 支持中途停止转写（`didRequestStop`）
 - 转写完成卡片摘要：引擎、模型 ID、耗时、说话人数、segment 数
 
+### 3.4.1 远程执行与 AllServes relay
+
+- 执行目标支持本机、直连 Mac mini VoiceScribe Server、All Service / AllServes relay。
+- 远程接口契约以 `docs/remote_allserves_integration.md` 为准。
+- 创建远程任务时，`engine`、`model_id`、`device`、`threads`、`batch_size_s`、`merge_length_s`、`speaker_diarization`、`hf_token` 必须放在 `arguments` 中。
+- relay 模式可使用顶层 `service: "voicescribe"` 作为路由元数据，但不能把转写参数移到顶层字段。
+- `hf_token` 只作为运行参数传递给 Qwen3-ASR / pyannote 子进程，不得在日志、文档、提交或错误消息中暴露真实值。
+- 远程完成后 App 优先按结果 manifest 的 `category` 加载 `transcript`、`speaker_text`、`speaker_map`，再回退到 `*_通话记录.md`、`*_整理版.md`、`*_speaker_map.json` 命名。
+- 远程和 relay 开发不得自动下载大模型、门控模型或付费资源；依赖由用户手动配置和验证。
+
 ### 3.5 音频播放
 
 - `Transcriber` 内置 `AVAudioPlayer`，支持播放/暂停
@@ -193,6 +203,12 @@
 | `Scripts/transcribe.py` | 三引擎转写核心：FunASR (paraformer-zh + cam++), VibeVoice MLX, Qwen3-ASR。结构化进度输出。 |
 | `Scripts/summarize.py` | LLM 摘要生成，支持 OpenAI Compatible / Anthropic Messages 协议 |
 
+### 远程接口
+
+| 文档 | 职责 |
+|------|------|
+| `docs/remote_allserves_integration.md` | Mac mini VoiceScribe Server 与 AllServes relay 的请求字段、响应字段、结果文件、错误处理、说话人区分依赖和安全边界 |
+
 ### 数据流
 
 1. 用户选择音频 → Swift 传路径 + 引擎 + 模型 ID + 性能参数给 Python
@@ -238,6 +254,7 @@
 - [ ] 摘要功能使用自定义 LLM 模型
 - [ ] 侧边栏标签页切换正常，环境状态实时更新
 - [ ] 设置中的引擎/模型选择正确联动
+- [ ] 远程模式和 AllServes relay 创建任务时转写参数保持在 `arguments`，结果文件能按 `category` 或标准命名加载
 - [ ] 转写前内存预检在低内存时自动降级并提示
 - [ ] UI 符合深色主题规格
 - [ ] 可打包为 .app 分发
