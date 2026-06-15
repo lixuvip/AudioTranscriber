@@ -19,10 +19,13 @@ struct PersonOrganizationVersionCheck {
     static func main() async throws {
         try checkAppendReloadAndOrdering()
         try checkMissingResultPathDoesNotSave()
+        try checkAppendSaveFailureDoesNotPolluteMemory()
         try checkTemporaryOutputAloneIsNotAVersion()
         try checkVersionsBackupRecoveryRestoresPrimary()
         try checkVersionsCorruptionMakesRepositoryReadOnlyWithoutBootstrap()
         try await checkRunnerSuccessCreatesVersionAndCleansTemporaryFiles()
+        try await checkRunnerCreatesUniquePathsForSameSecondRuns()
+        try await checkRunnerSanitizesDotSegmentPersonID()
         try await checkRunnerFailureDoesNotCreateVersionOrResult()
         print("PersonOrganizationVersionCheck passed")
     }
@@ -129,6 +132,78 @@ struct PersonOrganizationVersionCheck {
                 ),
                 false,
                 "missing result append does not save organization_versions.json"
+            )
+        }
+    }
+
+    private static func checkAppendSaveFailureDoesNotPolluteMemory() throws {
+        try withTemporaryDirectory("append-save-failure") { root in
+            let versionsURL = root.appendingPathComponent("organization_versions.json")
+            let keptResult = root.appendingPathComponent("kept.md")
+            let failedResult = root.appendingPathComponent("failed.md")
+            let afterResult = root.appendingPathComponent("after.md")
+            try "kept".write(to: keptResult, atomically: true, encoding: .utf8)
+            try "failed".write(to: failedResult, atomically: true, encoding: .utf8)
+            try "after".write(to: afterResult, atomically: true, encoding: .utf8)
+
+            let repository = PersonArchiveRepository(archiveRoot: root)
+            try repository.load(indexEntries: [])
+            try repository.appendOrganizationVersion(
+                makeVersion(
+                    id: "kept",
+                    personID: "person-a",
+                    createdAt: Date(timeIntervalSince1970: 10),
+                    resultPath: keptResult.path
+                )
+            )
+
+            try FileManager.default.setAttributes(
+                [.immutable: true],
+                ofItemAtPath: versionsURL.path
+            )
+            defer {
+                try? FileManager.default.setAttributes(
+                    [.immutable: false],
+                    ofItemAtPath: versionsURL.path
+                )
+            }
+            do {
+                try repository.appendOrganizationVersion(
+                    makeVersion(
+                        id: "failed",
+                        personID: "person-a",
+                        createdAt: Date(timeIntervalSince1970: 20),
+                        resultPath: failedResult.path
+                    )
+                )
+                fatalError("append should surface save failure")
+            } catch {
+                assertEqual(
+                    repository.versions(for: "person-a").map(\.id),
+                    ["kept"],
+                    "failed append does not pollute in-memory versions"
+                )
+            }
+
+            try FileManager.default.setAttributes(
+                [.immutable: false],
+                ofItemAtPath: versionsURL.path
+            )
+            try repository.appendOrganizationVersion(
+                makeVersion(
+                    id: "after",
+                    personID: "person-a",
+                    createdAt: Date(timeIntervalSince1970: 30),
+                    resultPath: afterResult.path
+                )
+            )
+
+            let reloaded = PersonArchiveRepository(archiveRoot: root)
+            try reloaded.load(indexEntries: [])
+            assertEqual(
+                reloaded.versions(for: "person-a").map(\.id),
+                ["after", "kept"],
+                "later successful append does not persist failed version"
             )
         }
     }
@@ -332,6 +407,107 @@ struct PersonOrganizationVersionCheck {
         }
     }
 
+    private static func checkRunnerCreatesUniquePathsForSameSecondRuns() async throws {
+        try await withTemporaryDirectory("runner-unique-paths") { root in
+            let scriptURL = root.appendingPathComponent("fake-summarize.sh")
+            try makeSuccessScript(
+                scriptURL: scriptURL,
+                captureURL: root.appendingPathComponent("capture.txt"),
+                capturedInputURL: root.appendingPathComponent("captured-input.md")
+            )
+            let fixedDate = Date(timeIntervalSince1970: 1_800)
+            let runner = await MainActor.run {
+                PersonOrganizationRunner(now: { fixedDate })
+            }
+
+            let first = await run(
+                request: makeRequest(
+                    root: root,
+                    scriptURL: scriptURL,
+                    personID: "person-a",
+                    templateID: "same-template",
+                    markdown: "# First\n\nfirst-only\n"
+                ),
+                with: runner
+            )
+            let second = await run(
+                request: makeRequest(
+                    root: root,
+                    scriptURL: scriptURL,
+                    personID: "person-a",
+                    templateID: "same-template",
+                    markdown: "# Second\n\nsecond-only\n"
+                ),
+                with: runner
+            )
+
+            guard let firstVersion = first.version,
+                  let secondVersion = second.version else {
+                fatalError("same-second runs should both return versions")
+            }
+            assertEqual(firstVersion.resultPath == secondVersion.resultPath, false, "same-second result paths are unique")
+            assertEqual(
+                FileManager.default.fileExists(atPath: firstVersion.resultPath),
+                true,
+                "first same-second result exists"
+            )
+            assertEqual(
+                FileManager.default.fileExists(atPath: secondVersion.resultPath),
+                true,
+                "second same-second result exists"
+            )
+            let firstContent = try String(contentsOfFile: firstVersion.resultPath, encoding: .utf8)
+            let secondContent = try String(contentsOfFile: secondVersion.resultPath, encoding: .utf8)
+            assertEqual(firstContent.contains("first-only"), true, "first result keeps first content")
+            assertEqual(firstContent.contains("second-only"), false, "first result is not overwritten")
+            assertEqual(secondContent.contains("second-only"), true, "second result keeps second content")
+            assertEqual(secondContent.contains("first-only"), false, "second result is independent")
+        }
+    }
+
+    private static func checkRunnerSanitizesDotSegmentPersonID() async throws {
+        try await withTemporaryDirectory("runner-dot-segment") { root in
+            let scriptURL = root.appendingPathComponent("fake-summarize.sh")
+            try makeSuccessScript(
+                scriptURL: scriptURL,
+                captureURL: root.appendingPathComponent("capture.txt"),
+                capturedInputURL: root.appendingPathComponent("captured-input.md")
+            )
+
+            let runner = await MainActor.run { PersonOrganizationRunner() }
+            let result = await run(
+                request: makeRequest(
+                    root: root,
+                    scriptURL: scriptURL,
+                    personID: "..",
+                    templateID: "..",
+                    markdown: "# Dot Segment\n"
+                ),
+                with: runner
+            )
+
+            guard let version = result.version else {
+                fatalError("dot-segment personID run should return version")
+            }
+            let organizationRoot = root.appendingPathComponent("人物整理", isDirectory: true)
+            assertPath(
+                URL(fileURLWithPath: version.resultPath),
+                isInside: organizationRoot,
+                "dot-segment result stays inside organization root"
+            )
+            assertEqual(
+                FileManager.default.fileExists(atPath: version.resultPath),
+                true,
+                "dot-segment final result exists"
+            )
+            assertEqual(
+                finalMarkdownFiles(in: root).count,
+                1,
+                "dot-segment run creates exactly one organized result file"
+            )
+        }
+    }
+
     private static func checkRunnerFailureDoesNotCreateVersionOrResult() async throws {
         try await withTemporaryDirectory("runner-failure") { root in
             let scriptURL = root.appendingPathComponent("fake-failing-summarize.sh")
@@ -379,6 +555,32 @@ struct PersonOrganizationVersionCheck {
                 "runner failure does not append repository versions"
             )
         }
+    }
+
+    private static func makeRequest(
+        root: URL,
+        scriptURL: URL,
+        personID: String,
+        templateID: String,
+        markdown: String,
+        prompt: String = "prompt"
+    ) -> PersonOrganizationRequest {
+        PersonOrganizationRequest(
+            personID: personID,
+            preparation: makePreparation(markdown: markdown),
+            model: LLMModel(
+                id: "gpt-test",
+                name: "Test Model",
+                apiBase: "https://example.test/v1",
+                apiKey: "sk-test-helper",
+                providerType: .openAICompatible
+            ),
+            templateID: templateID,
+            prompt: prompt,
+            archiveRoot: root,
+            pythonPath: "/bin/sh",
+            scriptPath: scriptURL.path
+        )
     }
 
     @MainActor
@@ -630,6 +832,14 @@ struct PersonOrganizationVersionCheck {
     ) {
         if access != .writable {
             fatalError("\(message): expected writable, got \(access)")
+        }
+    }
+
+    private static func assertPath(_ child: URL, isInside parent: URL, _ message: String) {
+        let childPath = child.standardizedFileURL.path
+        let parentPath = parent.standardizedFileURL.path
+        if childPath != parentPath && !childPath.hasPrefix(parentPath + "/") {
+            fatalError("\(message): expected \(childPath) inside \(parentPath)")
         }
     }
 

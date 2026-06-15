@@ -26,6 +26,11 @@ final class PersonOrganizationRunner: ObservableObject {
 
     private var process: Process?
     private var didCancel = false
+    private let now: () -> Date
+
+    init(now: @escaping () -> Date = Date.init) {
+        self.now = now
+    }
 
     func start(
         request: PersonOrganizationRequest,
@@ -49,22 +54,24 @@ final class PersonOrganizationRunner: ObservableObject {
 
         let fileManager = FileManager.default
         let runID = UUID().uuidString
+        let shortRunID = String(runID.prefix(8))
         let temporaryDirectory = request.archiveRoot
             .appendingPathComponent(".tmp", isDirectory: true)
         let inputURL = temporaryDirectory
             .appendingPathComponent("person-organization-\(runID).md")
         let temporaryOutputURL = temporaryDirectory
             .appendingPathComponent("person-organization-\(runID)-output.md")
-        let createdAt = Date()
+        let createdAt = now()
         let templateTitle = displayTitle(for: request.templateID)
-        let finalDirectory = request.archiveRoot
+        let organizationRoot = request.archiveRoot
             .appendingPathComponent("人物整理", isDirectory: true)
+        let finalDirectory = organizationRoot
             .appendingPathComponent(
                 Self.sanitizePathComponent(request.personID, fallback: "person"),
                 isDirectory: true
             )
         let finalURL = finalDirectory.appendingPathComponent(
-            "\(Self.timestampFormatter.string(from: createdAt))_\(Self.sanitizePathComponent(templateTitle, fallback: "template")).md"
+            "\(Self.timestampFormatter.string(from: createdAt))_\(Self.sanitizePathComponent(templateTitle, fallback: "template"))_\(shortRunID).md"
         )
 
         do {
@@ -137,18 +144,10 @@ final class PersonOrganizationRunner: ObservableObject {
 
     func cancel() {
         guard isRunning else { return }
+        guard let process, process.isRunning else { return }
         didCancel = true
         progressText = "正在取消人物整理"
-
-        if let process {
-            if process.isRunning {
-                process.terminate()
-            }
-        } else {
-            process = nil
-            isRunning = false
-            progressText = "已取消"
-        }
+        process.terminate()
     }
 
     private func handleTermination(
@@ -197,7 +196,7 @@ final class PersonOrganizationRunner: ObservableObject {
                 at: finalDirectory,
                 withIntermediateDirectories: true
             )
-            try moveTemporaryOutput(from: temporaryOutputURL, to: finalURL)
+            let resultURL = try moveTemporaryOutput(from: temporaryOutputURL, to: finalURL)
             cleanupTemporaryFiles(inputURL: inputURL, outputURL: temporaryOutputURL)
             let version = PersonOrganizationVersion(
                 personID: request.personID,
@@ -208,7 +207,7 @@ final class PersonOrganizationRunner: ObservableObject {
                 templateID: request.templateID,
                 customPrompt: request.prompt,
                 createdAt: createdAt,
-                resultPath: finalURL.path
+                resultPath: resultURL.path
             )
             finish(version: version, cancelled: false, message: nil, completion: completion)
         } catch {
@@ -254,15 +253,32 @@ final class PersonOrganizationRunner: ObservableObject {
         try? FileManager.default.removeItem(at: outputURL)
     }
 
-    private func moveTemporaryOutput(from temporaryOutputURL: URL, to finalURL: URL) throws {
-        if FileManager.default.fileExists(atPath: finalURL.path) {
-            _ = try FileManager.default.replaceItemAt(
-                finalURL,
-                withItemAt: temporaryOutputURL
-            )
-        } else {
-            try FileManager.default.moveItem(at: temporaryOutputURL, to: finalURL)
+    private func moveTemporaryOutput(
+        from temporaryOutputURL: URL,
+        to preferredFinalURL: URL
+    ) throws -> URL {
+        var candidateURL = preferredFinalURL
+        for attempt in 0..<10 {
+            if attempt > 0 {
+                candidateURL = Self.collisionAvoidingURL(for: preferredFinalURL)
+            }
+            if FileManager.default.fileExists(atPath: candidateURL.path) {
+                continue
+            }
+            do {
+                try FileManager.default.moveItem(at: temporaryOutputURL, to: candidateURL)
+                return candidateURL
+            } catch {
+                if FileManager.default.fileExists(atPath: candidateURL.path) {
+                    continue
+                }
+                throw error
+            }
         }
+        throw CocoaError(
+            .fileWriteFileExists,
+            userInfo: [NSFilePathErrorKey: preferredFinalURL.path]
+        )
     }
 
     private func displayTitle(for templateID: String) -> String {
@@ -281,7 +297,23 @@ final class PersonOrganizationRunner: ObservableObject {
             .components(separatedBy: invalid)
             .joined(separator: "_")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return sanitized.isEmpty ? fallback : sanitized
+        guard !sanitized.isEmpty,
+              sanitized != ".",
+              sanitized != ".." else {
+            return fallback
+        }
+        return sanitized
+    }
+
+    private static func collisionAvoidingURL(for preferredURL: URL) -> URL {
+        let directory = preferredURL.deletingLastPathComponent()
+        let baseName = preferredURL.deletingPathExtension().lastPathComponent
+        let pathExtension = preferredURL.pathExtension
+        let suffix = String(UUID().uuidString.prefix(8))
+        let fileName = pathExtension.isEmpty
+            ? "\(baseName)_\(suffix)"
+            : "\(baseName)_\(suffix).\(pathExtension)"
+        return directory.appendingPathComponent(fileName)
     }
 
     private static let timestampFormatter: DateFormatter = {

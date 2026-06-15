@@ -152,8 +152,10 @@ final class PersonArchiveRepository {
     func appendOrganizationVersion(_ version: PersonOrganizationVersion) throws {
         try requireWritable()
         try requireExistingResultFile(atPath: version.resultPath)
-        versionsFile.versions.append(version)
-        try saveVersions()
+        var stagedVersionsFile = versionsFile
+        stagedVersionsFile.versions.append(version)
+        try AtomicJSONFileStore.save(stagedVersionsFile, to: versionsURL)
+        versionsFile = stagedVersionsFile
     }
 
     func clearDraft(for personID: String) throws {
@@ -464,10 +466,6 @@ final class PersonArchiveRepository {
 
     private func saveDrafts() throws {
         try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
-    }
-
-    private func saveVersions() throws {
-        try AtomicJSONFileStore.save(versionsFile, to: versionsURL)
     }
 
     private func savePeopleThenPruneDrafts() throws {
