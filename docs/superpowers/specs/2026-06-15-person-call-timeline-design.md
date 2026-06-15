@@ -111,7 +111,8 @@
       "created_at": "2026-06-15T10:05:00Z",
       "reverted_at": null
     }
-  ]
+  ],
+  "unassigned_phone_numbers": []
 }
 ```
 
@@ -119,6 +120,7 @@
 - 一个标准化号码同一时间只能属于一个人物。
 - 合并联系人只更新号码映射和人物元数据。
 - `merge_history`保存合并前涉及人物的完整映射快照，用于撤销最近一次尚未撤销的合并。
+- `unassigned_phone_numbers`保存用户主动拆出的未归档号码，避免下次加载时再次自动创建人物。
 - 原始文件名中的姓名和号码仅作为导入线索，不作为可覆盖的事实。
 
 ### `selection_drafts.json`
