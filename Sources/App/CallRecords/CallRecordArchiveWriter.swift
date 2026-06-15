@@ -53,7 +53,9 @@ enum CallRecordArchiveWriter {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(archiveMetadata)
         try data.write(to: outputDir.appendingPathComponent("metadata.json"))
-        try writeIndex(allJobs: allJobs, archiveRoot: archiveRoot(for: outputDir))
+        let archiveRoot = archiveRoot(for: outputDir)
+        try writeIndex(allJobs: allJobs, archiveRoot: archiveRoot)
+        NotificationCenter.default.post(name: .callRecordArchiveWriterDidWrite, object: archiveRoot)
     }
 
     static func writeIndex(allJobs: [CallRecordBatchJob], archiveRoot: URL) throws {
@@ -211,4 +213,8 @@ enum CallRecordArchiveWriter {
             .joined(separator: "_")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
+
+extension Notification.Name {
+    static let callRecordArchiveWriterDidWrite = Notification.Name("CallRecordArchiveWriter.didWrite")
 }

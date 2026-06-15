@@ -73,6 +73,7 @@ struct SidebarView: View {
             VStack(spacing: 6) {
                 SidebarTabButton(title: "工作台", icon: "waveform", tab: .workspace, activeTab: $activeTab)
                 SidebarTabButton(title: "批量任务", icon: "queue.play.next", tab: .batchQueue, activeTab: $activeTab, badgeCount: 3)
+                SidebarTabButton(title: "人物归档", icon: "person.2.fill", tab: .people, activeTab: $activeTab)
                 SidebarTabButton(title: "交互校对", icon: "edit.note", tab: .editor, activeTab: $activeTab)
                 SidebarTabButton(title: "声纹库", icon: "person.wave.2", tab: .voiceprints, activeTab: $activeTab)
                 SidebarTabButton(title: "实时日志", icon: "terminal", tab: .logs, activeTab: $activeTab)

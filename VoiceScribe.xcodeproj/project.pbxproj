@@ -7,33 +7,47 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0594305876A792F5D39542D9 /* PersonArchiveModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BACBA9B49F06FD6C19D00F6 /* PersonArchiveModels.swift */; };
+		09D23FEB103EB40ECDA3368B /* CallRecordArchiveWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B981EEFA4E6D7BCAC295EC8 /* CallRecordArchiveWriter.swift */; };
 		13EA8F9F1B963BBC879AD26B /* AudioTranscriberApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51D364097A49D705553868E /* AudioTranscriberApp.swift */; };
 		178DC2918C57A4315BC9A0EB /* WaveformVisualizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E52BCF645A5CE24FDBBC034 /* WaveformVisualizer.swift */; };
 		19F143D100B06E6DD827B0C2 /* RemoteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 550073F75712C4788C1D1D1A /* RemoteModels.swift */; };
 		1B13938ECB09D0D256B2FC74 /* Transcriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03DEA15EE20766357A9838D2 /* Transcriber.swift */; };
+		1D1B5540E22998F1F498C541 /* PersonMergeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3C85FA9C129CB1436C8106 /* PersonMergeSheet.swift */; };
 		20D1C325F3926F6C415D60AB /* ButtonStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004A8654D65D67F201E86B5C /* ButtonStyles.swift */; };
 		328FC216C42013ECB30D42C6 /* SettingsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E0CE40A95BF596293606D7E /* SettingsPanel.swift */; };
+		35019E598608B132814C8C0B /* PersonTimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AECDE01F94367C8A571C6BC8 /* PersonTimelineView.swift */; };
 		35ECE4630B5DB53D22640C70 /* transcribe.py in Resources */ = {isa = PBXBuildFile; fileRef = F47C961537E47C956498D347 /* transcribe.py */; };
 		3C351047D8CFCFAB14E18DC2 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 190678458E7008DF86D4F857 /* HistoryView.swift */; };
 		3E5214C53D859153FD17459A /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5046F921D30C16323BA71FF8 /* KeychainStore.swift */; };
 		41249F96CE0F6C7FDACCE57F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77C0345B374CA2D73C2E4E1E /* ContentView.swift */; };
+		445B58352F970A08BA67EEEB /* PersonListPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D581FB4305330F6B96729B8 /* PersonListPane.swift */; };
 		471B8DD0CD9B0DD0F88B8CAA /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030F23089880347CA781E740 /* SettingsManager.swift */; };
 		4D5DBC44515DB9A74E833566 /* TranscriptionHistoryEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB278065885CEB6DD0C3EB6 /* TranscriptionHistoryEntry.swift */; };
 		4E6E160967FBD3F11A1481E3 /* StatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D50E523140C54843C5E7975 /* StatusCard.swift */; };
 		55930A3D2849015EB73ADA2E /* VoiceprintStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18D5C307306319C4CECAD358 /* VoiceprintStore.swift */; };
 		57B344624C14C625588CB522 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 808D1BCA3CFA5C38A366A803 /* Assets.xcassets */; };
+		5DB7039456AA72E4037BC21A /* PersonOrganizationRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E8E9AF1A37EA61E6E8BB57 /* PersonOrganizationRunner.swift */; };
 		5EDAAEDCC346CBDD4B65F96F /* AIInsightsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77EA38F6F6CBEBC74AD18DB1 /* AIInsightsPanel.swift */; };
+		6328A9838D79A463888464F3 /* PersonTimelineStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B3AA6E5B7F1CD59AA412BCE /* PersonTimelineStore.swift */; };
 		6344E06CA0FE97BA2ECBC403 /* RemoteTranscriberClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB0362D2F8A910FEC4B8EB /* RemoteTranscriberClient.swift */; };
+		648A86E82E58F0D86AE1784F /* CallRecordModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05C7317733E862BF44C98F22 /* CallRecordModels.swift */; };
 		6ADE8F926704E3051B792822 /* EnvironmentChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FDD769759AC1D8CF81BC6D6 /* EnvironmentChecker.swift */; };
 		6CF93DFAC58E1BBAF7C9B3FA /* LogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3704CBDF2E5B8E5F20E3EBA /* LogView.swift */; };
 		6E45602B50CA2E9E90CDE200 /* TranscriptionTimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7689158B1B4B7D7D6FBB8F7C /* TranscriptionTimelineView.swift */; };
+		6F8351D8FCB3E79E26510387 /* PersonMaintenanceSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF67F05D25D19E1F30A1639 /* PersonMaintenanceSheets.swift */; };
 		79B08BDD0B064A23E49AD5A0 /* Color+Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6944397C5341121225AEE0A /* Color+Hex.swift */; };
 		901F82BCB1B006A92A029008 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FAA0DB43F9603FF23C341D2 /* SidebarView.swift */; };
 		A8EF6E036E392BF1B1D238EF /* FolderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 665FE5B0C9E57FC0B4EF000F /* FolderPicker.swift */; };
 		B76AA00391FB6F0EFDC2245A /* FileDropZone.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37F86800A30E6326FEB374C /* FileDropZone.swift */; };
+		CC464ADB98548869C1C46325 /* PersonOrganizationPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C376D5A202B25E5DE94C795 /* PersonOrganizationPane.swift */; };
 		D9691A1AA1C51E7B29DF22C9 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C955ECCD1DFAB967359B5973 /* SetupView.swift */; };
+		DA5B56D005895DF077400985 /* PersonOrganizationInputBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E481E2CD420C1B740DA7AA35 /* PersonOrganizationInputBuilder.swift */; };
 		DAE360C5BB48F6A8132346B3 /* voiceprint.py in Resources */ = {isa = PBXBuildFile; fileRef = 84F8770031D03B0691A7D866 /* voiceprint.py */; };
+		F0163D855E9983D21DB6DEFB /* PersonCallsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B380C2DB9D674BA23D8A99 /* PersonCallsPane.swift */; };
 		F08F57D4736AD2E2E59E200F /* FolderPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E24E8CD5250B4691EB33CEC /* FolderPickerSheet.swift */; };
+		F3D7D16FEAE03965E5972F04 /* AtomicJSONFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9204D421454C0D95387CB4E /* AtomicJSONFileStore.swift */; };
+		F7C7D40B02FA64E2F028F201 /* PersonArchiveRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1270403399C21F703D4DBED0 /* PersonArchiveRepository.swift */; };
 		FDB9B11A12CC4D299CE5224A /* summarize.py in Resources */ = {isa = PBXBuildFile; fileRef = 9D1F11429FCD24BEAEAEFEFF /* summarize.py */; };
 		FF9C2E1CE2C821210C0E8620 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 4EEB4566CCFF1C22B0C4F557 /* AppIcon.icns */; };
 /* End PBXBuildFile section */
@@ -42,34 +56,48 @@
 		004A8654D65D67F201E86B5C /* ButtonStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ButtonStyles.swift; sourceTree = "<group>"; };
 		030F23089880347CA781E740 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
 		03DEA15EE20766357A9838D2 /* Transcriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transcriber.swift; sourceTree = "<group>"; };
+		05C7317733E862BF44C98F22 /* CallRecordModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordModels.swift; sourceTree = "<group>"; };
 		0FAA0DB43F9603FF23C341D2 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		1270403399C21F703D4DBED0 /* PersonArchiveRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonArchiveRepository.swift; sourceTree = "<group>"; };
 		18D5C307306319C4CECAD358 /* VoiceprintStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceprintStore.swift; sourceTree = "<group>"; };
 		190678458E7008DF86D4F857 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		1B3AA6E5B7F1CD59AA412BCE /* PersonTimelineStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonTimelineStore.swift; sourceTree = "<group>"; };
+		26B380C2DB9D674BA23D8A99 /* PersonCallsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonCallsPane.swift; sourceTree = "<group>"; };
+		2BACBA9B49F06FD6C19D00F6 /* PersonArchiveModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonArchiveModels.swift; sourceTree = "<group>"; };
 		2D50E523140C54843C5E7975 /* StatusCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusCard.swift; sourceTree = "<group>"; };
 		2EDB0362D2F8A910FEC4B8EB /* RemoteTranscriberClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTranscriberClient.swift; sourceTree = "<group>"; };
 		3FDD769759AC1D8CF81BC6D6 /* EnvironmentChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentChecker.swift; sourceTree = "<group>"; };
+		4B981EEFA4E6D7BCAC295EC8 /* CallRecordArchiveWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordArchiveWriter.swift; sourceTree = "<group>"; };
 		4EEB4566CCFF1C22B0C4F557 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		5046F921D30C16323BA71FF8 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		550073F75712C4788C1D1D1A /* RemoteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteModels.swift; sourceTree = "<group>"; };
+		5AF67F05D25D19E1F30A1639 /* PersonMaintenanceSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonMaintenanceSheets.swift; sourceTree = "<group>"; };
 		646B0B0ABBEFC7DF63462DDB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		665FE5B0C9E57FC0B4EF000F /* FolderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderPicker.swift; sourceTree = "<group>"; };
+		6C376D5A202B25E5DE94C795 /* PersonOrganizationPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonOrganizationPane.swift; sourceTree = "<group>"; };
 		6CB278065885CEB6DD0C3EB6 /* TranscriptionHistoryEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionHistoryEntry.swift; sourceTree = "<group>"; };
 		7689158B1B4B7D7D6FBB8F7C /* TranscriptionTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionTimelineView.swift; sourceTree = "<group>"; };
 		77C0345B374CA2D73C2E4E1E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		77EA38F6F6CBEBC74AD18DB1 /* AIInsightsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIInsightsPanel.swift; sourceTree = "<group>"; };
+		7D581FB4305330F6B96729B8 /* PersonListPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonListPane.swift; sourceTree = "<group>"; };
 		7E52BCF645A5CE24FDBBC034 /* WaveformVisualizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformVisualizer.swift; sourceTree = "<group>"; };
 		808D1BCA3CFA5C38A366A803 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		84E8E9AF1A37EA61E6E8BB57 /* PersonOrganizationRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonOrganizationRunner.swift; sourceTree = "<group>"; };
 		84F8770031D03B0691A7D866 /* voiceprint.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = voiceprint.py; sourceTree = "<group>"; };
 		8E0CE40A95BF596293606D7E /* SettingsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPanel.swift; sourceTree = "<group>"; };
 		8E24E8CD5250B4691EB33CEC /* FolderPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderPickerSheet.swift; sourceTree = "<group>"; };
 		9D1F11429FCD24BEAEAEFEFF /* summarize.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = summarize.py; sourceTree = "<group>"; };
+		AECDE01F94367C8A571C6BC8 /* PersonTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonTimelineView.swift; sourceTree = "<group>"; };
 		B37F86800A30E6326FEB374C /* FileDropZone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropZone.swift; sourceTree = "<group>"; };
 		B51D364097A49D705553868E /* AudioTranscriberApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioTranscriberApp.swift; sourceTree = "<group>"; };
+		C9204D421454C0D95387CB4E /* AtomicJSONFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtomicJSONFileStore.swift; sourceTree = "<group>"; };
 		C955ECCD1DFAB967359B5973 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
 		CFC52EB50DE55BCE37D53DE7 /* VoiceScribe.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoiceScribe.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E481E2CD420C1B740DA7AA35 /* PersonOrganizationInputBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonOrganizationInputBuilder.swift; sourceTree = "<group>"; };
 		F3704CBDF2E5B8E5F20E3EBA /* LogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogView.swift; sourceTree = "<group>"; };
 		F47C961537E47C956498D347 /* transcribe.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = transcribe.py; sourceTree = "<group>"; };
 		F6944397C5341121225AEE0A /* Color+Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Hex.swift"; sourceTree = "<group>"; };
+		FA3C85FA9C129CB1436C8106 /* PersonMergeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonMergeSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -97,6 +125,27 @@
 				CFC52EB50DE55BCE37D53DE7 /* VoiceScribe.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		11E25972044475AFEB20D332 /* CallRecords */ = {
+			isa = PBXGroup;
+			children = (
+				C9204D421454C0D95387CB4E /* AtomicJSONFileStore.swift */,
+				4B981EEFA4E6D7BCAC295EC8 /* CallRecordArchiveWriter.swift */,
+				05C7317733E862BF44C98F22 /* CallRecordModels.swift */,
+				2BACBA9B49F06FD6C19D00F6 /* PersonArchiveModels.swift */,
+				1270403399C21F703D4DBED0 /* PersonArchiveRepository.swift */,
+				26B380C2DB9D674BA23D8A99 /* PersonCallsPane.swift */,
+				7D581FB4305330F6B96729B8 /* PersonListPane.swift */,
+				5AF67F05D25D19E1F30A1639 /* PersonMaintenanceSheets.swift */,
+				FA3C85FA9C129CB1436C8106 /* PersonMergeSheet.swift */,
+				E481E2CD420C1B740DA7AA35 /* PersonOrganizationInputBuilder.swift */,
+				6C376D5A202B25E5DE94C795 /* PersonOrganizationPane.swift */,
+				84E8E9AF1A37EA61E6E8BB57 /* PersonOrganizationRunner.swift */,
+				1B3AA6E5B7F1CD59AA412BCE /* PersonTimelineStore.swift */,
+				AECDE01F94367C8A571C6BC8 /* PersonTimelineView.swift */,
+			);
+			path = CallRecords;
 			sourceTree = "<group>";
 		};
 		282DC9EA8CD6EA3D23E5027B /* Scripts */ = {
@@ -143,6 +192,7 @@
 				03DEA15EE20766357A9838D2 /* Transcriber.swift */,
 				6CB278065885CEB6DD0C3EB6 /* TranscriptionHistoryEntry.swift */,
 				18D5C307306319C4CECAD358 /* VoiceprintStore.swift */,
+				11E25972044475AFEB20D332 /* CallRecords */,
 				A27B2E9DE44F80516145703C /* Components */,
 			);
 			path = App;
@@ -234,8 +284,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				5EDAAEDCC346CBDD4B65F96F /* AIInsightsPanel.swift in Sources */,
+				F3D7D16FEAE03965E5972F04 /* AtomicJSONFileStore.swift in Sources */,
 				13EA8F9F1B963BBC879AD26B /* AudioTranscriberApp.swift in Sources */,
 				20D1C325F3926F6C415D60AB /* ButtonStyles.swift in Sources */,
+				09D23FEB103EB40ECDA3368B /* CallRecordArchiveWriter.swift in Sources */,
+				648A86E82E58F0D86AE1784F /* CallRecordModels.swift in Sources */,
 				79B08BDD0B064A23E49AD5A0 /* Color+Hex.swift in Sources */,
 				41249F96CE0F6C7FDACCE57F /* ContentView.swift in Sources */,
 				6ADE8F926704E3051B792822 /* EnvironmentChecker.swift in Sources */,
@@ -245,6 +298,17 @@
 				3C351047D8CFCFAB14E18DC2 /* HistoryView.swift in Sources */,
 				3E5214C53D859153FD17459A /* KeychainStore.swift in Sources */,
 				6CF93DFAC58E1BBAF7C9B3FA /* LogView.swift in Sources */,
+				0594305876A792F5D39542D9 /* PersonArchiveModels.swift in Sources */,
+				F7C7D40B02FA64E2F028F201 /* PersonArchiveRepository.swift in Sources */,
+				F0163D855E9983D21DB6DEFB /* PersonCallsPane.swift in Sources */,
+				445B58352F970A08BA67EEEB /* PersonListPane.swift in Sources */,
+				6F8351D8FCB3E79E26510387 /* PersonMaintenanceSheets.swift in Sources */,
+				1D1B5540E22998F1F498C541 /* PersonMergeSheet.swift in Sources */,
+				DA5B56D005895DF077400985 /* PersonOrganizationInputBuilder.swift in Sources */,
+				CC464ADB98548869C1C46325 /* PersonOrganizationPane.swift in Sources */,
+				5DB7039456AA72E4037BC21A /* PersonOrganizationRunner.swift in Sources */,
+				6328A9838D79A463888464F3 /* PersonTimelineStore.swift in Sources */,
+				35019E598608B132814C8C0B /* PersonTimelineView.swift in Sources */,
 				19F143D100B06E6DD827B0C2 /* RemoteModels.swift in Sources */,
 				6344E06CA0FE97BA2ECBC403 /* RemoteTranscriberClient.swift in Sources */,
 				471B8DD0CD9B0DD0F88B8CAA /* SettingsManager.swift in Sources */,

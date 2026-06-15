@@ -8,6 +8,8 @@ struct ContentView: View {
     @StateObject private var settingsManager = SettingsManager()
     @StateObject private var historyManager = HistoryManager()
     @StateObject private var voiceprintStore = VoiceprintStore()
+    @StateObject private var personTimelineStore = PersonTimelineStore()
+    @StateObject private var personOrganizationRunner = PersonOrganizationRunner()
 
     @State private var selectedFileURL: URL?
     @State private var customOutputDir: String = ""
@@ -36,6 +38,7 @@ struct ContentView: View {
     enum MainTab {
         case workspace
         case batchQueue
+        case people
         case editor
         case voiceprints
         case logs
@@ -72,6 +75,9 @@ struct ContentView: View {
                                     .transition(.opacity)
                             case .batchQueue:
                                 batchQueueTab
+                                    .transition(.opacity)
+                            case .people:
+                                peopleTab
                                     .transition(.opacity)
                             case .editor:
                                 editorTab
@@ -125,12 +131,21 @@ struct ContentView: View {
             if summaryModelID.isEmpty, let first = settingsManager.customModels.first {
                 summaryModelID = first.id
             }
+            openLastPersonArchiveRootIfAvailable()
         }
         .onChange(of: transcriber.pendingHistoryEntry) { entry in
             if let entry = entry {
                 historyManager.add(entry)
                 transcriber.pendingHistoryEntry = nil
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .callRecordArchiveWriterDidWrite)) { notification in
+            guard let archiveRoot = notification.object as? URL,
+                  archiveRoot == callRecordArchiveRoot(),
+                  personTimelineStore.archiveRoot == archiveRoot else {
+                return
+            }
+            try? personTimelineStore.reload()
         }
         .onChange(of: envChecker.selectedPerformanceTier) { tier in
             settingsManager.performanceTier = tier.rawValue
@@ -261,6 +276,7 @@ struct ContentView: View {
         switch tab {
         case .workspace: return "工作台"
         case .batchQueue: return "批量处理队列"
+        case .people: return "人物归档"
         case .editor: return "交互校对编辑器"
         case .voiceprints: return "声纹库"
         case .logs: return "实时日志"
@@ -543,6 +559,58 @@ struct ContentView: View {
                 .foregroundColor(Color(hex: color))
         }
         .padding(.vertical, 4)
+    }
+
+    private func callRecordArchiveRoot() -> URL? {
+        guard !customOutputDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: customOutputDir, isDirectory: true)
+    }
+
+    // MARK: - People Archive Tab
+
+    private var peopleTab: some View {
+        PersonTimelineView(
+            store: personTimelineStore,
+            runner: personOrganizationRunner,
+            settingsManager: settingsManager,
+            pythonPath: envChecker.pythonPath,
+            summarizeScriptPath: Bundle.main.url(forResource: "summarize", withExtension: "py")?.path ?? "",
+            onChooseArchive: choosePersonArchiveRoot
+        )
+    }
+
+    private func choosePersonArchiveRoot() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try personTimelineStore.openArchive(url)
+                UserDefaults.standard.set(url.path, forKey: "lastPersonArchiveRoot")
+            } catch {
+                personTimelineStore.present(error)
+            }
+        }
+    }
+
+    private func openLastPersonArchiveRootIfAvailable() {
+        guard let path = UserDefaults.standard.string(forKey: "lastPersonArchiveRoot"),
+              !path.isEmpty else {
+            return
+        }
+        let root = URL(fileURLWithPath: path, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent("call_index.json").path) else {
+            return
+        }
+
+        do {
+            try personTimelineStore.openArchive(root)
+        } catch {
+            personTimelineStore.present(error)
+        }
     }
 
     // MARK: - Logs Tab
