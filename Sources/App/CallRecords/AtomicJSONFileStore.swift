@@ -175,7 +175,7 @@ enum AtomicJSONFileStore {
         return formatter
     }()
 
-    private enum StoreError: Error {
+    enum StoreError: Error, Equatable {
         case roundTripMismatch
     }
 }

@@ -10,6 +10,7 @@ struct PersonArchiveRepositoryCheck {
         try checkBackupRecovery()
         try checkSavingAfterRecoveryPreservesValidBackup()
         try checkReadOnlyWhenPrimaryAndBackupAreCorrupt()
+        try checkLossyRoundTripThrowsMismatch()
         print("PersonArchiveRepositoryCheck passed")
     }
 
@@ -298,6 +299,27 @@ struct PersonArchiveRepositoryCheck {
         }
     }
 
+    private static func checkLossyRoundTripThrowsMismatch() throws {
+        try withTemporaryDirectory("lossy-round-trip") { root in
+            let url = root.appendingPathComponent("lossy.json")
+            do {
+                try AtomicJSONFileStore.save(
+                    LossyRoundTripFixture(value: 41),
+                    to: url
+                )
+                fatalError("lossy fixture should fail save round-trip validation")
+            } catch AtomicJSONFileStore.StoreError.roundTripMismatch {
+                assertEqual(
+                    FileManager.default.fileExists(atPath: url.path),
+                    false,
+                    "round-trip mismatch should not write primary file"
+                )
+            } catch {
+                fatalError("expected roundTripMismatch, got \(error)")
+            }
+        }
+    }
+
     private static func assertCodableRoundTrip<T: Codable & Equatable>(
         _ value: T,
         _ message: String
@@ -343,6 +365,28 @@ struct PersonArchiveRepositoryCheck {
     ) {
         if lhs != rhs {
             fatalError("\(message): expected \(rhs), got \(lhs)")
+        }
+    }
+
+    private struct LossyRoundTripFixture: Codable, Equatable {
+        let value: Int
+
+        init(value: Int) {
+            self.value = value
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            value = try container.decode(Int.self, forKey: .value) + 1
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(value, forKey: .value)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case value
         }
     }
 }
