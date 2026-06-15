@@ -241,6 +241,13 @@ final class PersonArchiveRepository {
 
         let merge = peopleFile.mergeHistory[mergeIndex]
         let restoredIDs = Set(merge.beforePeople.map(\.id))
+        let allowedExistingOwnerIDs = restoredIDs.union([merge.targetPersonID])
+        for phone in uniquePhones(merge.beforePeople.flatMap(\.phoneNumbers)) {
+            if let ownerID = ownerID(for: phone, excluding: allowedExistingOwnerIDs) {
+                throw PersonArchiveError.phoneConflict(phone: phone, ownerID: ownerID)
+            }
+        }
+
         peopleFile.people.removeAll {
             restoredIDs.contains($0.id) || $0.id == merge.targetPersonID
         }

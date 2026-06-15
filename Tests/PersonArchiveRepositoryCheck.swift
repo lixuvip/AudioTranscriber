@@ -14,6 +14,7 @@ struct PersonArchiveRepositoryCheck {
         try checkIndexHelpersAndTimelineAvailability()
         try checkPeopleBootstrapMergeSplitReassignAndRename()
         try checkPhoneConflictErrors()
+        try checkRevertMergeRejectsRestoredPhoneConflict()
         print("PersonArchiveRepositoryCheck passed")
     }
 
@@ -594,6 +595,75 @@ struct PersonArchiveRepositoryCheck {
                     displayName: "章文"
                 )
             }
+        }
+    }
+
+    private static func checkRevertMergeRejectsRestoredPhoneConflict() throws {
+        try withTemporaryDirectory("revert-merge-conflict") { root in
+            let calls = [
+                makeCall(id: "call-a", name: "章文", phone: "15397111188", time: 100),
+                makeCall(id: "call-b", name: "章文", phone: "13102133750", time: 200)
+            ]
+            let repository = PersonArchiveRepository(
+                archiveRoot: root,
+                now: { Date(timeIntervalSince1970: 500) }
+            )
+            try repository.load(indexEntries: calls)
+
+            let first = try require(
+                repository.person(containing: "15397111188"),
+                "first phone person"
+            )
+            let second = try require(
+                repository.person(containing: "13102133750"),
+                "second phone person"
+            )
+            _ = try repository.mergePeople(
+                personIDs: [first.id, second.id],
+                targetPersonID: first.id,
+                displayName: "章文"
+            )
+            let merge = try require(
+                repository.peopleFile.mergeHistory.last,
+                "merge history"
+            )
+
+            var conflictedFile = repository.peopleFile
+            conflictedFile.people.append(
+                PersonRecord(
+                    id: "third-party",
+                    displayName: "第三方",
+                    phoneNumbers: ["13102133750"]
+                )
+            )
+            try AtomicJSONFileStore.save(
+                conflictedFile,
+                to: root.appendingPathComponent("people.json")
+            )
+            try repository.load(indexEntries: [])
+
+            let peopleBeforeRevert = repository.peopleFile.people
+                .sorted { $0.id < $1.id }
+            let historyBeforeRevert = repository.peopleFile.mergeHistory
+            do {
+                try repository.revertMerge(merge.id)
+                fatalError("revert merge should reject restored phone conflict")
+            } catch PersonArchiveError.phoneConflict(let phone, let ownerID) {
+                assertEqual(phone, "13102133750", "revert conflict phone")
+                assertEqual(ownerID, "third-party", "revert conflict owner")
+            } catch {
+                fatalError("expected phoneConflict, got \(error)")
+            }
+            assertEqual(
+                repository.peopleFile.people.sorted { $0.id < $1.id },
+                peopleBeforeRevert,
+                "failed revert should preserve people mapping"
+            )
+            assertEqual(
+                repository.peopleFile.mergeHistory,
+                historyBeforeRevert,
+                "failed revert should preserve merge history"
+            )
         }
     }
 
