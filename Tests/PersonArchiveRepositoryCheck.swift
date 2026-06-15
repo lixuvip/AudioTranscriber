@@ -12,6 +12,7 @@ struct PersonArchiveRepositoryCheck {
         try checkReadOnlyWhenPrimaryAndBackupAreCorrupt()
         try checkLossyRoundTripThrowsMismatch()
         try checkIndexHelpersAndTimelineAvailability()
+        try checkRepositoryReadOnlyGuardsAllMutations()
         try checkPeopleBootstrapMergeSplitReassignAndRename()
         try checkPhoneConflictErrors()
         try checkRevertMergeRejectsRestoredPhoneConflict()
@@ -458,6 +459,14 @@ struct PersonArchiveRepositoryCheck {
                 true,
                 "revert marks merge history"
             )
+            do {
+                try repository.revertMerge(merge.id)
+                fatalError("reverting the same merge twice should fail")
+            } catch PersonArchiveError.mergeNotFound(let mergeID) {
+                assertEqual(mergeID, merge.id, "second revert reports missing merge")
+            } catch {
+                fatalError("expected mergeNotFound, got \(error)")
+            }
 
             let restoredFirst = try require(
                 repository.person(containing: "15397111188"),
@@ -498,6 +507,64 @@ struct PersonArchiveRepositoryCheck {
             )
             let renamed = try repository.renamePerson(reassigned.id, displayName: " 章文 ")
             assertEqual(renamed.displayName, "章文", "rename trims display name")
+        }
+    }
+
+    private static func checkRepositoryReadOnlyGuardsAllMutations() throws {
+        try withTemporaryDirectory("repository-read-only-guards") { root in
+            let peopleURL = root.appendingPathComponent("people.json")
+            try Data("{broken-primary".utf8).write(to: peopleURL)
+            try Data("{broken-backup".utf8).write(
+                to: peopleURL.appendingPathExtension("backup")
+            )
+
+            let repository = PersonArchiveRepository(archiveRoot: root)
+            try repository.load(indexEntries: [])
+            switch repository.access {
+            case .readOnly(let reason):
+                assertEqual(reason.isEmpty, false, "repository read-only reason")
+            default:
+                fatalError("repository should enter read-only mode")
+            }
+
+            assertThrowsReadOnly("createPerson") {
+                _ = try repository.createPerson(
+                    displayName: "只读新人物",
+                    phones: ["10086"]
+                )
+            }
+            assertThrowsReadOnly("renamePerson") {
+                _ = try repository.renamePerson(
+                    "missing-person",
+                    displayName: "只读改名"
+                )
+            }
+            assertThrowsReadOnly("assignUnassignedPhones") {
+                _ = try repository.assignUnassignedPhones(
+                    ["10010"],
+                    to: "missing-person"
+                )
+            }
+            assertThrowsReadOnly("mergePeople") {
+                _ = try repository.mergePeople(
+                    personIDs: ["person-a", "person-b"],
+                    targetPersonID: "person-a",
+                    displayName: "只读合并"
+                )
+            }
+            assertThrowsReadOnly("splitPhones") {
+                _ = try repository.splitPhones(
+                    from: "missing-person",
+                    phones: ["10086"],
+                    newDisplayName: nil
+                )
+            }
+            assertThrowsReadOnly("deletePersonKeepingPhonesUnassigned") {
+                try repository.deletePersonKeepingPhonesUnassigned("missing-person")
+            }
+            assertThrowsReadOnly("revertMerge") {
+                try repository.revertMerge("missing-merge")
+            }
         }
     }
 
@@ -767,6 +834,20 @@ struct PersonArchiveRepositoryCheck {
             assertEqual(conflictOwnerID, ownerID, "phone conflict owner")
         } catch {
             fatalError("expected phoneConflict, got \(error)")
+        }
+    }
+
+    private static func assertThrowsReadOnly(
+        _ message: String,
+        operation: () throws -> Void
+    ) {
+        do {
+            try operation()
+            fatalError("\(message) should throw readOnly")
+        } catch PersonArchiveError.readOnly(let reason) {
+            assertEqual(reason.isEmpty, false, "\(message) read-only reason")
+        } catch {
+            fatalError("\(message) expected readOnly, got \(error)")
         }
     }
 
