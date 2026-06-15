@@ -14,6 +14,8 @@ struct PersonArchiveRepositoryCheck {
         try checkIndexHelpersAndTimelineAvailability()
         try checkRepositoryReadOnlyGuardsAllMutations()
         try checkPeopleBootstrapMergeSplitReassignAndRename()
+        try checkSplitPhonesBlankDisplayNameDoesNotMutateSource()
+        try checkLoadNormalizesPersistedPhoneNumbers()
         try checkPhoneConflictErrors()
         try checkRevertMergeRejectsRestoredPhoneConflict()
         print("PersonArchiveRepositoryCheck passed")
@@ -565,6 +567,132 @@ struct PersonArchiveRepositoryCheck {
             assertThrowsReadOnly("revertMerge") {
                 try repository.revertMerge("missing-merge")
             }
+        }
+    }
+
+    private static func checkSplitPhonesBlankDisplayNameDoesNotMutateSource() throws {
+        try withTemporaryDirectory("split-blank-display-name") { root in
+            let peopleURL = root.appendingPathComponent("people.json")
+            let source = PersonRecord(
+                id: "person-source",
+                displayName: "章文",
+                phoneNumbers: ["13102133750", "15397111188"],
+                createdAt: Date(timeIntervalSince1970: 100),
+                updatedAt: Date(timeIntervalSince1970: 100)
+            )
+            try AtomicJSONFileStore.save(
+                PeopleFile(people: [source]),
+                to: peopleURL
+            )
+
+            let repository = PersonArchiveRepository(
+                archiveRoot: root,
+                now: { Date(timeIntervalSince1970: 500) }
+            )
+            try repository.load(indexEntries: [])
+
+            do {
+                _ = try repository.splitPhones(
+                    from: source.id,
+                    phones: ["15397111188"],
+                    newDisplayName: "   "
+                )
+                fatalError("blank split display name should fail")
+            } catch PersonArchiveError.invalidMerge {
+                let person = try require(
+                    repository.peopleFile.people.first { $0.id == source.id },
+                    "source person after failed split"
+                )
+                assertEqual(
+                    person.phoneNumbers,
+                    ["13102133750", "15397111188"],
+                    "failed split keeps source phones in memory"
+                )
+            } catch {
+                fatalError("expected invalidMerge, got \(error)")
+            }
+
+            _ = try repository.renamePerson(source.id, displayName: "章文保留")
+
+            let reloaded = PersonArchiveRepository(archiveRoot: root)
+            try reloaded.load(indexEntries: [])
+            let persisted = try require(
+                reloaded.peopleFile.people.first { $0.id == source.id },
+                "persisted source person after failed split"
+            )
+            assertEqual(
+                persisted.phoneNumbers,
+                ["13102133750", "15397111188"],
+                "successful later save does not persist failed split"
+            )
+        }
+    }
+
+    private static func checkLoadNormalizesPersistedPhoneNumbers() throws {
+        try withTemporaryDirectory("load-normalizes-phones") { root in
+            let peopleURL = root.appendingPathComponent("people.json")
+            try AtomicJSONFileStore.save(
+                PeopleFile(
+                    people: [
+                        PersonRecord(
+                            id: "person-formatted",
+                            displayName: "章文",
+                            phoneNumbers: ["153-9711-1188", "", "15397111188"]
+                        )
+                    ],
+                    unassignedPhoneNumbers: ["131-0213-3750", ""]
+                ),
+                to: peopleURL
+            )
+
+            let calls = [
+                makeCall(
+                    id: "call-a",
+                    name: "章文",
+                    phone: "15397111188",
+                    time: 100
+                )
+            ]
+            let repository = PersonArchiveRepository(archiveRoot: root)
+            try repository.load(indexEntries: calls)
+
+            let person = try require(
+                repository.person(containing: "15397111188"),
+                "normalized lookup finds formatted persisted phone"
+            )
+            assertEqual(person.id, "person-formatted", "formatted phone owner")
+            assertEqual(
+                repository.calls(for: person.id).map(\.id),
+                ["call-a"],
+                "calls match normalized persisted phone"
+            )
+            assertEqual(repository.people.count, 1, "normalized phone does not bootstrap duplicate person")
+            assertEqual(
+                repository.peopleFile.people.first?.phoneNumbers,
+                ["15397111188"],
+                "load normalizes people phone numbers in memory"
+            )
+            assertEqual(
+                repository.peopleFile.unassignedPhoneNumbers,
+                ["13102133750"],
+                "load normalizes unassigned phone numbers in memory"
+            )
+
+            let persisted = AtomicJSONFileStore.load(
+                PeopleFile.self,
+                from: peopleURL,
+                defaultValue: PeopleFile()
+            )
+            assertEqual(
+                persisted.value.people.first?.phoneNumbers,
+                ["15397111188"],
+                "load persists normalized people phone numbers"
+            )
+            assertEqual(
+                persisted.value.unassignedPhoneNumbers,
+                ["13102133750"],
+                "load persists normalized unassigned phone numbers"
+            )
         }
     }
 

@@ -38,6 +38,7 @@ final class PersonArchiveRepository {
         )
         peopleFile = result.value
         access = result.access
+        let sanitizedPeopleFile = sanitizePeopleFile()
 
         if case .recoveredFromBackup = access {
             do {
@@ -49,6 +50,9 @@ final class PersonArchiveRepository {
         }
 
         guard case .readOnly = access else {
+            if sanitizedPeopleFile {
+                try savePeople()
+            }
             try bootstrapMissingPhones()
             return
         }
@@ -58,7 +62,7 @@ final class PersonArchiveRepository {
         let normalized = normalizePhone(phone)
         guard !normalized.isEmpty else { return nil }
         return peopleFile.people.first {
-            $0.phoneNumbers.contains(normalized)
+            Set($0.phoneNumbers.map(normalizePhone)).contains(normalized)
         }
     }
 
@@ -66,9 +70,9 @@ final class PersonArchiveRepository {
         guard let person = peopleFile.people.first(where: { $0.id == personID }) else {
             return []
         }
-        let phones = Set(person.phoneNumbers)
+        let phones = Set(person.phoneNumbers.map(normalizePhone))
         return indexEntries
-            .filter { phones.contains($0.normalizedPhone) }
+            .filter { phones.contains(normalizePhone($0.normalizedPhone)) }
             .sorted { lhs, rhs in
                 if lhs.callDate == rhs.callDate {
                     return lhs.id < rhs.id
@@ -189,21 +193,26 @@ final class PersonArchiveRepository {
         try requireWritable()
         let sourceIndex = try personIndex(for: personID)
         let requestedPhones = uniquePhones(phones)
-        let sourcePhones = Set(peopleFile.people[sourceIndex].phoneNumbers)
+        let sourcePhones = Set(peopleFile.people[sourceIndex].phoneNumbers.map(normalizePhone))
         let movedPhones = requestedPhones.filter { sourcePhones.contains($0) }
         guard !movedPhones.isEmpty else {
             return nil
         }
+        let newPersonDisplayName: String?
+        if let newDisplayName {
+            newPersonDisplayName = try validatedDisplayName(newDisplayName)
+        } else {
+            newPersonDisplayName = nil
+        }
 
         peopleFile.people[sourceIndex].phoneNumbers = uniquePhones(
             peopleFile.people[sourceIndex].phoneNumbers.filter {
-                !movedPhones.contains($0)
+                !movedPhones.contains(normalizePhone($0))
             }
         )
         peopleFile.people[sourceIndex].updatedAt = now()
 
-        if let newDisplayName {
-            let displayName = try validatedDisplayName(newDisplayName)
+        if let displayName = newPersonDisplayName {
             let timestamp = now()
             let person = PersonRecord(
                 displayName: displayName,
@@ -255,6 +264,27 @@ final class PersonArchiveRepository {
         peopleFile.mergeHistory[mergeIndex].revertedAt = now()
         removeUnassignedPhones(merge.beforePeople.flatMap(\.phoneNumbers))
         try savePeople()
+    }
+
+    private func sanitizePeopleFile() -> Bool {
+        var sanitized = peopleFile
+        sanitized.people = sanitized.people.map(sanitizedPerson)
+        sanitized.mergeHistory = sanitized.mergeHistory.map { merge in
+            var sanitizedMerge = merge
+            sanitizedMerge.beforePeople = merge.beforePeople.map(sanitizedPerson)
+            return sanitizedMerge
+        }
+        sanitized.unassignedPhoneNumbers = uniquePhones(sanitized.unassignedPhoneNumbers)
+
+        guard sanitized != peopleFile else { return false }
+        peopleFile = sanitized
+        return true
+    }
+
+    private func sanitizedPerson(_ person: PersonRecord) -> PersonRecord {
+        var sanitized = person
+        sanitized.phoneNumbers = uniquePhones(person.phoneNumbers)
+        return sanitized
     }
 
     private func bootstrapMissingPhones() throws {
@@ -338,7 +368,8 @@ final class PersonArchiveRepository {
         let normalized = normalizePhone(phone)
         guard !normalized.isEmpty else { return nil }
         return peopleFile.people.first {
-            !excludedIDs.contains($0.id) && $0.phoneNumbers.contains(normalized)
+            !excludedIDs.contains($0.id)
+                && Set($0.phoneNumbers.map(normalizePhone)).contains(normalized)
         }?.id
     }
 
