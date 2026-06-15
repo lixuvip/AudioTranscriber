@@ -127,15 +127,17 @@ final class PersonArchiveRepository {
     func setDraftCallIDs(_ callIDs: Set<String>, for personID: String) throws {
         try requireWritable()
         let pruned = callIDs.intersection(availableCallIDs(for: personID))
+        var stagedDraftsFile = draftsFile
         if pruned.isEmpty {
-            draftsFile.drafts.removeValue(forKey: personID)
+            stagedDraftsFile.drafts.removeValue(forKey: personID)
         } else {
-            draftsFile.drafts[personID] = PersonSelectionDraft(
+            stagedDraftsFile.drafts[personID] = PersonSelectionDraft(
                 callIDs: pruned.sorted(),
                 updatedAt: stableNow()
             )
         }
-        try saveDrafts()
+        try saveDrafts(stagedDraftsFile)
+        draftsFile = stagedDraftsFile
     }
 
     func versions(for personID: String) -> [PersonOrganizationVersion] {
@@ -151,6 +153,9 @@ final class PersonArchiveRepository {
 
     func appendOrganizationVersion(_ version: PersonOrganizationVersion) throws {
         try requireWritable()
+        guard !versionsFile.versions.contains(where: { $0.id == version.id }) else {
+            return
+        }
         try requireExistingResultFile(atPath: version.resultPath)
         var stagedVersionsFile = versionsFile
         stagedVersionsFile.versions.append(version)
@@ -465,6 +470,10 @@ final class PersonArchiveRepository {
     }
 
     private func saveDrafts() throws {
+        try saveDrafts(draftsFile)
+    }
+
+    private func saveDrafts(_ draftsFile: SelectionDraftsFile) throws {
         try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
     }
 

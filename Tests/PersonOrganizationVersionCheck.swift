@@ -18,6 +18,7 @@ struct LLMModel: Codable, Identifiable {
 struct PersonOrganizationVersionCheck {
     static func main() async throws {
         try checkAppendReloadAndOrdering()
+        try checkAppendSameVersionIDIsIdempotent()
         try checkMissingResultPathDoesNotSave()
         try checkAppendSaveFailureDoesNotPolluteMemory()
         try checkTemporaryOutputAloneIsNotAVersion()
@@ -92,6 +93,38 @@ struct PersonOrganizationVersionCheck {
                 reloaded.versions(for: "person-b").map(\.id),
                 ["other-person"],
                 "versions query filters by person ID"
+            )
+        }
+    }
+
+    private static func checkAppendSameVersionIDIsIdempotent() throws {
+        try withTemporaryDirectory("append-same-version-id-idempotent") { root in
+            let result = root.appendingPathComponent("duplicate.md")
+            try "duplicate".write(to: result, atomically: true, encoding: .utf8)
+
+            let repository = PersonArchiveRepository(archiveRoot: root)
+            try repository.load(indexEntries: [])
+            let version = makeVersion(
+                id: "duplicate-version",
+                personID: "person-a",
+                createdAt: Date(timeIntervalSince1970: 10),
+                resultPath: result.path
+            )
+
+            try repository.appendOrganizationVersion(version)
+            try repository.appendOrganizationVersion(version)
+            assertEqual(
+                repository.versions(for: "person-a").map(\.id),
+                ["duplicate-version"],
+                "same version id append is idempotent in memory"
+            )
+
+            let reloaded = PersonArchiveRepository(archiveRoot: root)
+            try reloaded.load(indexEntries: [])
+            assertEqual(
+                reloaded.versions(for: "person-a").map(\.id),
+                ["duplicate-version"],
+                "same version id append is idempotent on disk"
             )
         }
     }

@@ -175,8 +175,14 @@ final class PersonTimelineStore: ObservableObject {
             throw error
         }
 
+        do {
+            try repository.clearDraft(for: version.personID)
+        } catch {
+            pendingVersionRepair = version
+            refreshArchiveState(preferredPersonID: version.personID)
+            throw error
+        }
         pendingVersionRepair = nil
-        try repository.clearDraft(for: version.personID)
         refreshArchiveState(preferredPersonID: version.personID)
     }
 
@@ -191,7 +197,12 @@ final class PersonTimelineStore: ObservableObject {
         }
 
         try repository.appendOrganizationVersion(version)
-        try repository.clearDraft(for: version.personID)
+        do {
+            try repository.clearDraft(for: version.personID)
+        } catch {
+            refreshArchiveState(preferredPersonID: version.personID)
+            throw error
+        }
         pendingVersionRepair = nil
         refreshArchiveState(preferredPersonID: version.personID)
     }

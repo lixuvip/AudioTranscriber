@@ -15,6 +15,7 @@ struct PersonSelectionDraftCheck {
         try await checkStoreSelectRecent30Days()
         try await checkStorePrepareOrganizationUsesCurrentSelection()
         try await checkStoreCommitRepairAndClearDraft()
+        try await checkStoreCommitRefreshesAfterDraftClearFails()
         try await checkStoreRepairPreservesPendingWhenDraftClearFails()
         print("PersonSelectionDraftCheck passed")
     }
@@ -747,6 +748,94 @@ struct PersonSelectionDraftCheck {
         }
     }
 
+    private static func checkStoreCommitRefreshesAfterDraftClearFails() async throws {
+        try await withTemporaryDirectoryAsync("store-commit-clear-draft-failure") { root in
+            let person = PersonRecord(
+                id: "person-a",
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            )
+            try savePeople([person], to: root)
+            let call = try makeAvailableCall(
+                root: root,
+                id: "call-a",
+                name: "章文",
+                phone: "15397111188",
+                time: 100
+            )
+            try saveIndex([call], to: root)
+
+            let result = root.appendingPathComponent("commit-clear-failure.md")
+            try "committed".write(to: result, atomically: true, encoding: .utf8)
+            let version = makeVersion(
+                id: "version-commit-clear-failure",
+                personID: person.id,
+                createdAt: Date(timeIntervalSince1970: 300),
+                resultPath: result.path
+            )
+            let store = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try store.openArchive(root)
+                store.selectPerson(person.id)
+                try store.toggleCall("call-a")
+            }
+
+            let draftsURL = root.appendingPathComponent("selection_drafts.json")
+            try FileManager.default.setAttributes(
+                [.immutable: true],
+                ofItemAtPath: draftsURL.path
+            )
+            var didThrow = false
+            do {
+                try await MainActor.run {
+                    try store.commitOrganizationVersion(version)
+                }
+            } catch {
+                didThrow = true
+            }
+            try FileManager.default.setAttributes(
+                [.immutable: false],
+                ofItemAtPath: draftsURL.path
+            )
+
+            assertEqual(didThrow, true, "commit should surface draft clear failure")
+            assertEqual(
+                await MainActor.run { store.pendingVersionRepair?.id },
+                Optional(version.id),
+                "store keeps pending repair when commit draft clear fails"
+            )
+            assertEqual(
+                await MainActor.run { store.versions.map(\.id) },
+                [version.id],
+                "store refreshes versions after commit append succeeds"
+            )
+            assertEqual(
+                await MainActor.run { store.selectedCallIDs },
+                Set(["call-a"]),
+                "store keeps draft selection after failed clear"
+            )
+
+            try await MainActor.run {
+                try store.repairVersionIndex()
+            }
+            assertEqual(
+                await MainActor.run { store.pendingVersionRepair },
+                nil,
+                "store clears pending repair after retry clears draft"
+            )
+            assertEqual(
+                await MainActor.run { store.versions.map(\.id) },
+                [version.id],
+                "store retry does not duplicate committed version"
+            )
+            assertEqual(
+                await MainActor.run { store.selectedCallIDs },
+                [],
+                "store retry clears draft"
+            )
+        }
+    }
+
     private static func checkStoreRepairPreservesPendingWhenDraftClearFails() async throws {
         try await withTemporaryDirectoryAsync("store-repair-clear-draft-failure") { root in
             let person = PersonRecord(
@@ -821,6 +910,25 @@ struct PersonSelectionDraftCheck {
                 await MainActor.run { store.pendingVersionRepair?.id },
                 Optional(repairVersion.id),
                 "store keeps pending repair when draft clear fails"
+            )
+            assertEqual(
+                await MainActor.run { store.versions.map(\.id) },
+                [repairVersion.id],
+                "store refreshes versions after repair append succeeds"
+            )
+
+            try await MainActor.run {
+                try store.repairVersionIndex()
+            }
+            assertEqual(
+                await MainActor.run { store.pendingVersionRepair },
+                nil,
+                "store clears pending repair after retry clears draft"
+            )
+            assertEqual(
+                await MainActor.run { store.versions.map(\.id) },
+                [repairVersion.id],
+                "store repair retry does not duplicate version"
             )
         }
     }
