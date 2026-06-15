@@ -40,10 +40,9 @@ struct PeopleFile: Codable, Equatable {
     }
 }
 
-struct PersonRecord: Codable, Equatable, Identifiable {
+struct PersonRecord: Codable, Equatable {
     var id: String
     var displayName: String
-    var aliases: [String]
     var phoneNumbers: [String]
     var createdAt: Date
     var updatedAt: Date
@@ -51,53 +50,55 @@ struct PersonRecord: Codable, Equatable, Identifiable {
     init(
         id: String = UUID().uuidString,
         displayName: String = "",
-        aliases: [String] = [],
         phoneNumbers: [String] = [],
         createdAt: Date = personArchiveTimestamp(),
         updatedAt: Date = personArchiveTimestamp()
     ) {
         self.id = id
         self.displayName = displayName
-        self.aliases = aliases
         self.phoneNumbers = phoneNumbers
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 }
 
-struct PersonMergeRecord: Codable, Equatable, Identifiable {
+struct PersonMergeRecord: Codable, Equatable {
     var id: String
-    var sourcePersonIDs: [String]
     var targetPersonID: String
-    var mergedAt: Date
+    var beforePeople: [PersonRecord]
+    var createdAt: Date
+    var revertedAt: Date?
 
     init(
         id: String = UUID().uuidString,
-        sourcePersonIDs: [String] = [],
         targetPersonID: String = "",
-        mergedAt: Date = personArchiveTimestamp()
+        beforePeople: [PersonRecord] = [],
+        createdAt: Date = personArchiveTimestamp(),
+        revertedAt: Date? = nil
     ) {
         self.id = id
-        self.sourcePersonIDs = sourcePersonIDs
         self.targetPersonID = targetPersonID
-        self.mergedAt = mergedAt
+        self.beforePeople = beforePeople
+        self.createdAt = createdAt
+        self.revertedAt = revertedAt
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
-        case sourcePersonIDs = "sourcePersonIds"
         case targetPersonID = "targetPersonId"
-        case mergedAt
+        case beforePeople
+        case createdAt
+        case revertedAt
     }
 }
 
 struct SelectionDraftsFile: Codable, Equatable {
     var schemaVersion: Int
-    var drafts: [PersonSelectionDraft]
+    var drafts: [String: PersonSelectionDraft]
 
     init(
         schemaVersion: Int = 1,
-        drafts: [PersonSelectionDraft] = []
+        drafts: [String: PersonSelectionDraft] = [:]
     ) {
         self.schemaVersion = schemaVersion
         self.drafts = drafts
@@ -107,9 +108,9 @@ struct SelectionDraftsFile: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         drafts = try container.decodeIfPresent(
-            [PersonSelectionDraft].self,
+            [String: PersonSelectionDraft].self,
             forKey: .drafts
-        ) ?? []
+        ) ?? [:]
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -119,23 +120,19 @@ struct SelectionDraftsFile: Codable, Equatable {
 }
 
 struct PersonSelectionDraft: Codable, Equatable {
-    var personID: String
-    var selectedCallIDs: [String]
+    var callIDs: [String]
     var updatedAt: Date
 
     init(
-        personID: String = "",
-        selectedCallIDs: [String] = [],
+        callIDs: [String] = [],
         updatedAt: Date = personArchiveTimestamp()
     ) {
-        self.personID = personID
-        self.selectedCallIDs = selectedCallIDs
+        self.callIDs = callIDs
         self.updatedAt = updatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case personID = "personId"
-        case selectedCallIDs = "selectedCallIds"
+        case callIDs = "callIds"
         case updatedAt
     }
 }
@@ -146,83 +143,91 @@ enum PersonOrganizationSourceKind: String, Codable, Equatable {
 }
 
 struct PersonOrganizationSourceSnapshot: Codable, Equatable {
-    var kind: PersonOrganizationSourceKind
-    var relativePath: String
-    var content: String
-    var capturedAt: Date
+    var callID: String
+    var sourceKind: PersonOrganizationSourceKind
+    var sourcePath: String
+    var contentHash: String
 
     init(
-        kind: PersonOrganizationSourceKind = .proofread,
-        relativePath: String = "",
-        content: String = "",
-        capturedAt: Date = personArchiveTimestamp()
+        callID: String = "",
+        sourceKind: PersonOrganizationSourceKind = .proofread,
+        sourcePath: String = "",
+        contentHash: String = ""
     ) {
-        self.kind = kind
-        self.relativePath = relativePath
-        self.content = content
-        self.capturedAt = capturedAt
+        self.callID = callID
+        self.sourceKind = sourceKind
+        self.sourcePath = sourcePath
+        self.contentHash = contentHash
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case callID = "callId"
+        case sourceKind
+        case sourcePath
+        case contentHash
     }
 }
 
 struct PersonSnapshot: Codable, Equatable {
-    var id: String
     var displayName: String
-    var aliases: [String]
     var phoneNumbers: [String]
 
     init(
-        id: String = "",
         displayName: String = "",
-        aliases: [String] = [],
         phoneNumbers: [String] = []
     ) {
-        self.id = id
         self.displayName = displayName
-        self.aliases = aliases
         self.phoneNumbers = phoneNumbers
-    }
-
-    init(person: PersonRecord) {
-        self.init(
-            id: person.id,
-            displayName: person.displayName,
-            aliases: person.aliases,
-            phoneNumbers: person.phoneNumbers
-        )
     }
 }
 
-struct PersonOrganizationVersion: Codable, Equatable, Identifiable {
+struct PersonOrganizationVersion: Codable, Equatable {
     var id: String
     var personID: String
     var personSnapshot: PersonSnapshot
-    var sources: [PersonOrganizationSourceSnapshot]
-    var content: String
+    var callIDs: [String]
+    var sourceSnapshots: [PersonOrganizationSourceSnapshot]
+    var modelID: String
+    var templateID: String
+    var customPrompt: String
     var createdAt: Date
+    var resultPath: String
 
     init(
         id: String = UUID().uuidString,
         personID: String = "",
         personSnapshot: PersonSnapshot = PersonSnapshot(),
-        sources: [PersonOrganizationSourceSnapshot] = [],
-        content: String = "",
-        createdAt: Date = personArchiveTimestamp()
+        callIDs: [String] = [],
+        sourceSnapshots: [PersonOrganizationSourceSnapshot] = [],
+        modelID: String = "",
+        templateID: String = "",
+        customPrompt: String = "",
+        createdAt: Date = personArchiveTimestamp(),
+        resultPath: String = ""
     ) {
         self.id = id
         self.personID = personID
         self.personSnapshot = personSnapshot
-        self.sources = sources
-        self.content = content
+        self.callIDs = callIDs
+        self.sourceSnapshots = sourceSnapshots
+        self.modelID = modelID
+        self.templateID = templateID
+        self.customPrompt = customPrompt
         self.createdAt = createdAt
+        self.resultPath = resultPath
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case personID = "personId"
         case personSnapshot
-        case sources
-        case content
+        case callIDs = "callIds"
+        case sourceSnapshots
+        case modelID = "modelId"
+        case templateID = "templateId"
+        case customPrompt
         case createdAt
+        case resultPath
     }
 }
 
@@ -267,5 +272,6 @@ struct JSONLoadResult<Value> {
 extension JSONLoadResult: Equatable where Value: Equatable {}
 
 private func personArchiveTimestamp() -> Date {
-    Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+    let milliseconds = floor(Date().timeIntervalSince1970 * 1_000) / 1_000
+    return Date(timeIntervalSince1970: milliseconds)
 }

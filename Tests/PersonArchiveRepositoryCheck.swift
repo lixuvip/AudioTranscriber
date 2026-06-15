@@ -3,15 +3,17 @@ import Foundation
 @main
 struct PersonArchiveRepositoryCheck {
     static func main() throws {
-        try checkModelDefaultsAndRoundTrip()
+        try checkModelDefaultsAndPlannedFieldsRoundTrip()
         try checkMissingFileUsesWritableDefault()
+        try checkMissingPrimaryRecoversValidBackup()
         try checkFirstSaveRoundTrip()
         try checkBackupRecovery()
+        try checkSavingAfterRecoveryPreservesValidBackup()
         try checkReadOnlyWhenPrimaryAndBackupAreCorrupt()
         print("PersonArchiveRepositoryCheck passed")
     }
 
-    private static func checkModelDefaultsAndRoundTrip() throws {
+    private static func checkModelDefaultsAndPlannedFieldsRoundTrip() throws {
         let defaults = PeopleFile()
         assertEqual(defaults.schemaVersion, 1, "default schema version")
         assertEqual(defaults.people, [], "default people")
@@ -37,38 +39,41 @@ struct PersonArchiveRepositoryCheck {
             "organization versions file decodes missing fields with defaults"
         )
 
-        let source = PersonOrganizationSourceSnapshot(
-            kind: .proofread,
-            relativePath: "calls/001/proofread.md",
-            content: "校对稿",
-            capturedAt: Date(timeIntervalSince1970: 10)
-        )
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000.123)
+        let updatedAt = Date(timeIntervalSince1970: 1_700_000_001.456)
+        let revertedAt = Date(timeIntervalSince1970: 1_700_000_002.789)
         let person = PersonRecord(
             id: "person-1",
             displayName: "章文",
-            aliases: ["章总"],
             phoneNumbers: ["15397111188"],
-            createdAt: Date(timeIntervalSince1970: 1),
-            updatedAt: Date(timeIntervalSince1970: 2)
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+        let beforePerson = PersonRecord(
+            id: "person-old",
+            displayName: "旧联系人",
+            phoneNumbers: ["10086"],
+            createdAt: createdAt,
+            updatedAt: updatedAt
         )
         let people = PeopleFile(
             people: [person],
             mergeHistory: [
                 PersonMergeRecord(
                     id: "merge-1",
-                    sourcePersonIDs: ["person-legacy"],
                     targetPersonID: person.id,
-                    mergedAt: Date(timeIntervalSince1970: 3)
+                    beforePeople: [beforePerson],
+                    createdAt: updatedAt,
+                    revertedAt: revertedAt
                 )
             ],
-            unassignedPhoneNumbers: ["10086"]
+            unassignedPhoneNumbers: ["10010"]
         )
         let drafts = SelectionDraftsFile(
             drafts: [
-                PersonSelectionDraft(
-                    personID: person.id,
-                    selectedCallIDs: ["call-1"],
-                    updatedAt: Date(timeIntervalSince1970: 4)
+                person.id: PersonSelectionDraft(
+                    callIDs: ["call-1", "call-2"],
+                    updatedAt: updatedAt
                 )
             ]
         )
@@ -77,25 +82,37 @@ struct PersonArchiveRepositoryCheck {
                 PersonOrganizationVersion(
                     id: "version-1",
                     personID: person.id,
-                    personSnapshot: PersonSnapshot(person: person),
-                    sources: [
-                        source,
+                    personSnapshot: PersonSnapshot(
+                        displayName: person.displayName,
+                        phoneNumbers: person.phoneNumbers
+                    ),
+                    callIDs: ["call-1", "call-2"],
+                    sourceSnapshots: [
                         PersonOrganizationSourceSnapshot(
-                            kind: .transcript,
-                            relativePath: "calls/001/transcript.md",
-                            content: "转写稿",
-                            capturedAt: Date(timeIntervalSince1970: 11)
+                            callID: "call-1",
+                            sourceKind: .proofread,
+                            sourcePath: "Calls/2024/call-1/proofread.md",
+                            contentHash: "sha256-proofread"
+                        ),
+                        PersonOrganizationSourceSnapshot(
+                            callID: "call-2",
+                            sourceKind: .transcript,
+                            sourcePath: "Calls/2024/call-2/transcript.md",
+                            contentHash: "sha256-transcript"
                         )
                     ],
-                    content: "人物归档",
-                    createdAt: Date(timeIntervalSince1970: 12)
+                    modelID: "qwen3",
+                    templateID: "default-person-archive",
+                    customPrompt: "保留业务事实",
+                    createdAt: Date(timeIntervalSince1970: 1_700_000_003.123),
+                    resultPath: "People/person-1/archive.md"
                 )
             ]
         )
 
-        assertCodableRoundTrip(people, "people file")
-        assertCodableRoundTrip(drafts, "selection drafts file")
-        assertCodableRoundTrip(versions, "organization versions file")
+        assertCodableRoundTrip(people, "planned people file")
+        assertCodableRoundTrip(drafts, "planned selection drafts file")
+        assertCodableRoundTrip(versions, "planned organization versions file")
     }
 
     private static func checkMissingFileUsesWritableDefault() throws {
@@ -111,6 +128,35 @@ struct PersonArchiveRepositoryCheck {
         }
     }
 
+    private static func checkMissingPrimaryRecoversValidBackup() throws {
+        try withTemporaryDirectory("missing-primary-valid-backup") { root in
+            let url = root.appendingPathComponent("people.json")
+            let expected = PeopleFile(
+                people: [
+                    PersonRecord(
+                        id: "person-backup",
+                        displayName: "备份联系人",
+                        phoneNumbers: ["10086"]
+                    )
+                ]
+            )
+
+            try AtomicJSONFileStore.save(expected, to: url)
+            try FileManager.default.moveItem(
+                at: url,
+                to: url.appendingPathExtension("backup")
+            )
+
+            let result = AtomicJSONFileStore.load(
+                PeopleFile.self,
+                from: url,
+                defaultValue: PeopleFile()
+            )
+            assertEqual(result.value, expected, "missing primary recovers backup value")
+            assertEqual(result.access, .recoveredFromBackup, "missing primary backup access")
+        }
+    }
+
     private static func checkFirstSaveRoundTrip() throws {
         try withTemporaryDirectory("first-save") { root in
             let url = root.appendingPathComponent("people.json")
@@ -119,7 +165,9 @@ struct PersonArchiveRepositoryCheck {
                     PersonRecord(
                         id: "person-1",
                         displayName: "章文",
-                        phoneNumbers: ["15397111188"]
+                        phoneNumbers: ["15397111188"],
+                        createdAt: Date(timeIntervalSince1970: 1_700_000_000.123),
+                        updatedAt: Date(timeIntervalSince1970: 1_700_000_001.456)
                     )
                 ],
                 unassignedPhoneNumbers: ["10010"]
@@ -142,6 +190,7 @@ struct PersonArchiveRepositoryCheck {
 
             let json = try String(contentsOf: url, encoding: .utf8)
             assertEqual(json.contains("\"schema_version\""), true, "snake case keys")
+            assertEqual(json.contains(".123"), true, "fractional seconds are encoded")
             assertEqual(json.contains("\n"), true, "pretty printed JSON")
         }
     }
@@ -179,6 +228,50 @@ struct PersonArchiveRepositoryCheck {
         }
     }
 
+    private static func checkSavingAfterRecoveryPreservesValidBackup() throws {
+        try withTemporaryDirectory("save-after-recovery") { root in
+            let url = root.appendingPathComponent("people.json")
+            let backupValue = PeopleFile(
+                people: [PersonRecord(id: "person-backup", displayName: "备份内容")]
+            )
+            let savedAfterRecovery = PeopleFile(
+                people: [PersonRecord(id: "person-new", displayName: "恢复后新内容")]
+            )
+
+            try AtomicJSONFileStore.save(backupValue, to: url)
+            try FileManager.default.moveItem(
+                at: url,
+                to: url.appendingPathExtension("backup")
+            )
+            try Data("{broken-primary".utf8).write(to: url)
+
+            let recovered = AtomicJSONFileStore.load(
+                PeopleFile.self,
+                from: url,
+                defaultValue: PeopleFile()
+            )
+            assertEqual(recovered.value, backupValue, "pre-save recovery value")
+            assertEqual(recovered.access, .recoveredFromBackup, "pre-save recovery access")
+
+            try AtomicJSONFileStore.save(savedAfterRecovery, to: url)
+
+            let current = AtomicJSONFileStore.load(
+                PeopleFile.self,
+                from: url,
+                defaultValue: PeopleFile()
+            )
+            assertEqual(current.value, savedAfterRecovery, "save after recovery writes primary")
+
+            let backup = AtomicJSONFileStore.load(
+                PeopleFile.self,
+                from: url.appendingPathExtension("backup"),
+                defaultValue: PeopleFile()
+            )
+            assertEqual(backup.value, backupValue, "save after recovery preserves valid backup")
+            assertEqual(backup.access, .writable, "preserved backup remains readable")
+        }
+    }
+
     private static func checkReadOnlyWhenPrimaryAndBackupAreCorrupt() throws {
         try withTemporaryDirectory("read-only") { root in
             let url = root.appendingPathComponent("people.json")
@@ -210,16 +303,17 @@ struct PersonArchiveRepositoryCheck {
         _ message: String
     ) {
         do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.keyEncodingStrategy = .convertToSnakeCase
-            let data = try encoder.encode(value)
-
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let decoded = try decoder.decode(T.self, from: data)
-            assertEqual(decoded, value, "\(message) Codable round trip")
+            try withTemporaryDirectory("codable-round-trip") { root in
+                let url = root.appendingPathComponent("round-trip.json")
+                try AtomicJSONFileStore.save(value, to: url)
+                let decoded = AtomicJSONFileStore.load(
+                    T.self,
+                    from: url,
+                    defaultValue: value
+                )
+                assertEqual(decoded.value, value, "\(message) Codable round trip")
+                assertEqual(decoded.access, .writable, "\(message) access")
+            }
         } catch {
             fatalError("\(message) Codable round trip failed: \(error)")
         }
