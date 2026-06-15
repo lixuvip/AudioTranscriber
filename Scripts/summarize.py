@@ -17,6 +17,8 @@ parser.add_argument("--api-base", default="")
 parser.add_argument("--api-key", default="")
 parser.add_argument("--provider-type", default="openAICompatible")
 parser.add_argument("--summary-prompt", default="")
+parser.add_argument("--output-path", default="")
+parser.add_argument("--document-title", default="摘要")
 args = parser.parse_args()
 
 text_path = args.text_path
@@ -32,7 +34,10 @@ elif base.endswith("_通话记录"):
     summary_base = base[:-5]
 else:
     summary_base = base
-out_path = os.path.join(os.path.dirname(text_path), f"{summary_base}_摘要.md")
+if args.output_path:
+    out_path = os.path.abspath(args.output_path)
+else:
+    out_path = os.path.join(os.path.dirname(text_path), f"{summary_base}_摘要.md")
 
 print(f"[VoiceScribe] 读取转写文本: {text_path}")
 print(f"[VoiceScribe] 使用模型: {model_name}")
@@ -52,7 +57,7 @@ prompt = f"""请阅读以下通话记录，生成一份简明摘要，包含：
 3. 关键结论或决策
 
 通话记录：
-{content[:8000]}
+{content}
 
 请用中文输出，结构清晰。"""
 
@@ -125,19 +130,34 @@ try:
     if not summary.strip():
         raise RuntimeError("模型返回为空，未生成摘要内容")
 except urllib.error.HTTPError as e:
-    detail = e.read().decode("utf-8", errors="ignore")
     hint = ""
     if e.code == 404:
         hint = "（提示：请检查 API Base URL 是否正确，DeepSeek 使用 https://api.deepseek.com/v1，接口形态选 OpenAI Compatible）"
     elif e.code == 401 or e.code == 403:
         hint = "（提示：API Key 无效或无权访问该模型）"
-    print(f"[VoiceScribe] LLM 调用失败: HTTP {e.code} - {detail[:300]}{hint}")
+    print(f"[VoiceScribe] LLM 调用失败: HTTP {e.code}{hint}")
     sys.exit(1)
 except Exception as e:
-    print(f"[VoiceScribe] LLM 调用失败: {e}")
+    print(f"[VoiceScribe] LLM 调用失败: {type(e).__name__}")
     sys.exit(1)
 
-with open(out_path, 'w', encoding='utf-8') as f:
-    f.write(f"# 摘要\n\n{summary}\n\n---\n原始转写: {os.path.basename(text_path)}\n")
+out_dir = os.path.dirname(out_path) or "."
+temp_path = f"{out_path}.{os.getpid()}.tmp"
+try:
+    os.makedirs(out_dir, exist_ok=True)
+    with open(temp_path, 'w', encoding='utf-8') as f:
+        f.write(
+            f"# {args.document_title}\n\n"
+            f"{summary.strip()}\n\n"
+            "---\n"
+            f"原始转写: {os.path.basename(text_path)}\n"
+        )
+    os.replace(temp_path, out_path)
+except Exception as e:
+    print(f"[VoiceScribe] 摘要保存失败: {type(e).__name__}")
+    sys.exit(1)
+finally:
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
 
 print(f"[VoiceScribe] 摘要已保存: {out_path}")
