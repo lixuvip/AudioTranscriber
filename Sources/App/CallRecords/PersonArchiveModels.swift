@@ -181,6 +181,28 @@ struct PersonSnapshot: Codable, Equatable {
     }
 }
 
+struct PersonOrganizationPreparation: Equatable {
+    let personSnapshot: PersonSnapshot
+    let callIDs: [String]
+    let sources: [PersonOrganizationSourceSnapshot]
+    let unavailableCallIDs: [String]
+    let markdown: String
+}
+
+enum PersonOrganizationInputError: LocalizedError {
+    case noSelectedCalls
+    case noReadableCalls
+
+    var errorDescription: String? {
+        switch self {
+        case .noSelectedCalls:
+            return "请至少选择一条通话"
+        case .noReadableCalls:
+            return "所选通话没有可读取的转写内容"
+        }
+    }
+}
+
 struct PersonOrganizationVersion: Codable, Equatable, Identifiable {
     var id: String
     var personID: String
