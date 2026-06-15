@@ -21,6 +21,7 @@ struct PersonTimelineView: View {
                     HSplitView {
                         PersonListPane(store: store)
                             .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+                            .accessibilityLabel("人物维护列表")
 
                         PersonCallsPane(store: store)
                             .frame(minWidth: 420)

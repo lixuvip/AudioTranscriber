@@ -29,6 +29,53 @@ final class PersonTimelineStore: ObservableObject {
         }
     }
 
+    var selectedPerson: PersonRecord? {
+        guard let selectedPersonID else { return nil }
+        return people.first { $0.id == selectedPersonID }
+    }
+
+    var mergeSuggestions: [[PersonRecord]] {
+        let groups = Dictionary(grouping: people) { person in
+            person.displayName
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+        }
+
+        return groups.values
+            .filter { $0.count > 1 }
+            .map { group in
+                group.sorted { lhs, rhs in
+                    if lhs.displayName == rhs.displayName {
+                        return lhs.id < rhs.id
+                    }
+                    return lhs.displayName.localizedStandardCompare(rhs.displayName)
+                        == .orderedAscending
+                }
+            }
+            .sorted { lhs, rhs in
+                guard let lhsName = lhs.first?.displayName,
+                      let rhsName = rhs.first?.displayName else {
+                    return lhs.count > rhs.count
+                }
+                let comparison = lhsName.localizedStandardCompare(rhsName)
+                if comparison == .orderedSame {
+                    return lhs.map(\.id).joined() < rhs.map(\.id).joined()
+                }
+                return comparison == .orderedAscending
+            }
+    }
+
+    var activeMergeRecords: [PersonMergeRecord] {
+        repository?.peopleFile.mergeHistory
+            .filter { $0.revertedAt == nil }
+            .sorted { lhs, rhs in
+                if lhs.createdAt == rhs.createdAt {
+                    return lhs.id > rhs.id
+                }
+                return lhs.createdAt > rhs.createdAt
+            } ?? []
+    }
+
     func openArchive(_ root: URL) throws {
         let previousSelection = selectedPersonID
         let isNewArchive = archiveRoot != root
@@ -54,6 +101,10 @@ final class PersonTimelineStore: ObservableObject {
         }
         let personCalls = repository.calls(for: personID)
         return (personCalls.count, personCalls.first?.callDateText)
+    }
+
+    func callCount(for personID: String) -> Int {
+        callSummary(for: personID).count
     }
 
     func selectPerson(_ id: String) {
