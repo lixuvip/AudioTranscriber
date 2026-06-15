@@ -2,6 +2,7 @@ import Foundation
 
 final class PersonArchiveRepository {
     private(set) var peopleFile = PeopleFile()
+    private(set) var draftsFile = SelectionDraftsFile()
     private(set) var indexEntries: [CallRecordIndexEntry] = []
     private(set) var access: PersonArchiveAccess = .writable
 
@@ -22,6 +23,10 @@ final class PersonArchiveRepository {
         archiveRoot.appendingPathComponent("people.json")
     }
 
+    private var draftsURL: URL {
+        archiveRoot.appendingPathComponent("selection_drafts.json")
+    }
+
     init(archiveRoot: URL, now: @escaping () -> Date = Date.init) {
         self.archiveRoot = archiveRoot
         self.now = now
@@ -31,31 +36,95 @@ final class PersonArchiveRepository {
         self.indexEntries = try indexEntries
             ?? CallRecordArchiveWriter.loadIndex(from: archiveRoot)
 
-        let result = AtomicJSONFileStore.load(
+        let peopleResult = AtomicJSONFileStore.load(
             PeopleFile.self,
             from: peopleURL,
             defaultValue: PeopleFile()
         )
-        peopleFile = result.value
-        access = result.access
+        peopleFile = peopleResult.value
         let sanitizedPeopleFile = sanitizePeopleFile()
 
-        if case .recoveredFromBackup = access {
+        let draftsResult = AtomicJSONFileStore.load(
+            SelectionDraftsFile.self,
+            from: draftsURL,
+            defaultValue: SelectionDraftsFile()
+        )
+        draftsFile = draftsResult.value
+
+        let readOnlyReasons = [
+            readOnlyReason(for: peopleResult.access, fileName: "people.json"),
+            readOnlyReason(for: draftsResult.access, fileName: "selection_drafts.json")
+        ].compactMap { $0 }
+        guard readOnlyReasons.isEmpty else {
+            access = .readOnly(reason: readOnlyReasons.joined(separator: "\n"))
+            return
+        }
+
+        var savedPeopleDuringRecovery = false
+        if case .recoveredFromBackup = peopleResult.access {
             do {
                 try AtomicJSONFileStore.save(peopleFile, to: peopleURL)
-                access = .writable
+                savedPeopleDuringRecovery = true
             } catch {
                 access = .readOnly(reason: "已读取备份，但无法恢复 people.json：\(error.localizedDescription)")
+                return
             }
         }
 
-        guard case .readOnly = access else {
-            if sanitizedPeopleFile {
-                try savePeople()
+        if case .recoveredFromBackup = draftsResult.access {
+            do {
+                try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
+            } catch {
+                access = .readOnly(
+                    reason: "已读取备份，但无法恢复 selection_drafts.json：\(error.localizedDescription)"
+                )
+                return
             }
-            try bootstrapMissingPhones()
-            return
         }
+
+        access = .writable
+        if sanitizedPeopleFile && !savedPeopleDuringRecovery {
+            try savePeople()
+        }
+        try bootstrapMissingPhones()
+    }
+
+    func draftCallIDs(for personID: String) -> Set<String> {
+        Set(draftsFile.drafts[personID]?.callIDs ?? [])
+    }
+
+    func setDraftCallIDs(_ callIDs: Set<String>, for personID: String) throws {
+        try requireWritable()
+        let pruned = callIDs.intersection(availableCallIDs(for: personID))
+        if pruned.isEmpty {
+            draftsFile.drafts.removeValue(forKey: personID)
+        } else {
+            draftsFile.drafts[personID] = PersonSelectionDraft(
+                callIDs: pruned.sorted(),
+                updatedAt: stableNow()
+            )
+        }
+        try saveDrafts()
+    }
+
+    func clearDraft(for personID: String) throws {
+        try setDraftCallIDs([], for: personID)
+    }
+
+    func selectAllAvailableCalls(for personID: String) throws {
+        try setDraftCallIDs(availableCallIDs(for: personID), for: personID)
+    }
+
+    func selectRecentCalls(for personID: String, since date: Date) throws {
+        let recentCallIDs = Set(
+            calls(for: personID)
+                .filter {
+                    $0.callDate >= date
+                        && PersonTimelineCall(entry: $0).isAvailable
+                }
+                .map(\.id)
+        )
+        try setDraftCallIDs(recentCallIDs, for: personID)
     }
 
     func person(containing phone: String) -> PersonRecord? {
@@ -88,7 +157,7 @@ final class PersonArchiveRepository {
         let normalizedPhones = uniquePhones(phones)
         try ensurePhonesAreUnowned(normalizedPhones)
 
-        let timestamp = now()
+        let timestamp = stableNow()
         let person = PersonRecord(
             displayName: displayName,
             phoneNumbers: normalizedPhones,
@@ -98,6 +167,7 @@ final class PersonArchiveRepository {
         peopleFile.people.append(person)
         removeUnassignedPhones(normalizedPhones)
         try savePeople()
+        try pruneAllDrafts()
         return person
     }
 
@@ -107,7 +177,7 @@ final class PersonArchiveRepository {
         let displayName = try validatedDisplayName(displayName)
         let index = try personIndex(for: personID)
         peopleFile.people[index].displayName = displayName
-        peopleFile.people[index].updatedAt = now()
+        peopleFile.people[index].updatedAt = stableNow()
         let person = peopleFile.people[index]
         try savePeople()
         return person
@@ -128,10 +198,11 @@ final class PersonArchiveRepository {
         peopleFile.people[index].phoneNumbers = uniquePhones(
             peopleFile.people[index].phoneNumbers + appendedPhones
         )
-        peopleFile.people[index].updatedAt = now()
+        peopleFile.people[index].updatedAt = stableNow()
         removeUnassignedPhones(normalizedPhones)
         let person = peopleFile.people[index]
         try savePeople()
+        try pruneAllDrafts()
         return person
     }
 
@@ -168,7 +239,7 @@ final class PersonArchiveRepository {
         }
         target.displayName = displayName
         target.phoneNumbers = uniquePhones(beforePeople.flatMap(\.phoneNumbers))
-        target.updatedAt = now()
+        target.updatedAt = stableNow()
 
         peopleFile.people.removeAll { selectedIDSet.contains($0.id) }
         peopleFile.people.append(target)
@@ -176,11 +247,12 @@ final class PersonArchiveRepository {
             PersonMergeRecord(
                 targetPersonID: targetPersonID,
                 beforePeople: beforePeople,
-                createdAt: now()
+                createdAt: stableNow()
             )
         )
         removeUnassignedPhones(target.phoneNumbers)
         try savePeople()
+        try pruneAllDrafts()
         return target
     }
 
@@ -210,10 +282,10 @@ final class PersonArchiveRepository {
                 !movedPhones.contains(normalizePhone($0))
             }
         )
-        peopleFile.people[sourceIndex].updatedAt = now()
+        peopleFile.people[sourceIndex].updatedAt = stableNow()
 
         if let displayName = newPersonDisplayName {
-            let timestamp = now()
+            let timestamp = stableNow()
             let person = PersonRecord(
                 displayName: displayName,
                 phoneNumbers: movedPhones,
@@ -223,11 +295,13 @@ final class PersonArchiveRepository {
             peopleFile.people.append(person)
             removeUnassignedPhones(movedPhones)
             try savePeople()
+            try pruneAllDrafts()
             return person
         }
 
         addUnassignedPhones(movedPhones)
         try savePeople()
+        try pruneAllDrafts()
         return nil
     }
 
@@ -238,6 +312,7 @@ final class PersonArchiveRepository {
         peopleFile.people.remove(at: index)
         addUnassignedPhones(phones)
         try savePeople()
+        try pruneAllDrafts()
     }
 
     func revertMerge(_ mergeID: String) throws {
@@ -261,9 +336,20 @@ final class PersonArchiveRepository {
             restoredIDs.contains($0.id) || $0.id == merge.targetPersonID
         }
         peopleFile.people.append(contentsOf: merge.beforePeople)
-        peopleFile.mergeHistory[mergeIndex].revertedAt = now()
+        peopleFile.mergeHistory[mergeIndex].revertedAt = stableNow()
         removeUnassignedPhones(merge.beforePeople.flatMap(\.phoneNumbers))
         try savePeople()
+        try pruneAllDrafts()
+    }
+
+    private func readOnlyReason(
+        for fileAccess: PersonArchiveAccess,
+        fileName: String
+    ) -> String? {
+        if case .readOnly(let reason) = fileAccess {
+            return "\(fileName)：\(reason)"
+        }
+        return nil
     }
 
     private func sanitizePeopleFile() -> Bool {
@@ -307,7 +393,7 @@ final class PersonArchiveRepository {
             let displayName = contactName.isEmpty
                 ? (rawPhone.isEmpty ? phone : rawPhone)
                 : contactName
-            let timestamp = now()
+            let timestamp = stableNow()
             addedPeople.append(
                 PersonRecord(
                     displayName: displayName,
@@ -332,6 +418,49 @@ final class PersonArchiveRepository {
 
     private func savePeople() throws {
         try AtomicJSONFileStore.save(peopleFile, to: peopleURL)
+    }
+
+    private func saveDrafts() throws {
+        try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
+    }
+
+    private func availableCallIDs(for personID: String) -> Set<String> {
+        Set(
+            calls(for: personID)
+                .filter { PersonTimelineCall(entry: $0).isAvailable }
+                .map(\.id)
+        )
+    }
+
+    private func pruneAllDrafts() throws {
+        var prunedDrafts = draftsFile.drafts
+        var didChange = false
+
+        for (personID, draft) in draftsFile.drafts {
+            let validCallIDs = availableCallIDs(for: personID)
+            let prunedCallIDs = Set(draft.callIDs)
+                .intersection(validCallIDs)
+                .sorted()
+
+            if prunedCallIDs.isEmpty {
+                prunedDrafts.removeValue(forKey: personID)
+                didChange = true
+            } else if prunedCallIDs != draft.callIDs {
+                var prunedDraft = draft
+                prunedDraft.callIDs = prunedCallIDs
+                prunedDrafts[personID] = prunedDraft
+                didChange = true
+            }
+        }
+
+        guard didChange else { return }
+        draftsFile.drafts = prunedDrafts
+        try saveDrafts()
+    }
+
+    private func stableNow() -> Date {
+        let milliseconds = floor(now().timeIntervalSince1970 * 1_000) / 1_000
+        return Date(timeIntervalSince1970: milliseconds)
     }
 
     private func personIndex(for personID: String) throws -> Int {
