@@ -46,17 +46,17 @@ class SummarizeOutputTests(unittest.TestCase):
                             json.dump({"prompt": prompt}, handle, ensure_ascii=False)
 
                     def _chat_create(self, *, model, messages, temperature, max_tokens):
-                        if os.environ.get("OPENAI_FAKE_RAISE") == "1":
-                            raise RuntimeError("fake provider failure")
                         self._record(messages[0]["content"])
+                        if os.environ.get("FAKE_OPENAI_FAIL") == "1":
+                            raise RuntimeError("fake provider failure")
                         message = SimpleNamespace(content="这是 fake 摘要")
                         choice = SimpleNamespace(message=message)
                         return SimpleNamespace(choices=[choice])
 
                     def _responses_create(self, *, model, input, temperature, max_output_tokens):
-                        if os.environ.get("OPENAI_FAKE_RAISE") == "1":
-                            raise RuntimeError("fake provider failure")
                         self._record(input)
+                        if os.environ.get("FAKE_OPENAI_FAIL") == "1":
+                            raise RuntimeError("fake provider failure")
                         return SimpleNamespace(output_text="这是 fake 摘要")
                 """
             ),
@@ -133,12 +133,15 @@ class SummarizeOutputTests(unittest.TestCase):
         output_path = self.root / "versions" / "failed.md"
 
         result = self.run_script(
+            self.input_path,
             "--output-path",
             output_path,
-            env={"OPENAI_FAKE_RAISE": "1"},
+            env={"FAKE_OPENAI_FAIL": "1"},
         )
 
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("LLM 调用失败", result.stdout + result.stderr)
+        self.assertIn("测试通话内容", self.recorded_prompt())
         self.assertFalse(output_path.exists())
         self.assertEqual(list(output_path.parent.glob("failed.md.*.tmp")), [])
 
