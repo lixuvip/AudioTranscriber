@@ -3,10 +3,12 @@ import Foundation
 final class PersonArchiveRepository {
     private static let peopleRecoveryFailureReason = "已读取备份，但无法恢复 people.json，请重新载入归档"
     private static let draftsRecoveryFailureReason = "已读取备份，但无法恢复 selection_drafts.json，请重新载入归档"
+    private static let versionsRecoveryFailureReason = "已读取备份，但无法恢复 organization_versions.json，请重新载入归档"
     private static let draftSyncFailureReason = "人物归档已保存，但选择草稿未能同步，请重新载入归档"
 
     private(set) var peopleFile = PeopleFile()
     private(set) var draftsFile = SelectionDraftsFile()
+    private(set) var versionsFile = OrganizationVersionsFile()
     private(set) var indexEntries: [CallRecordIndexEntry] = []
     private(set) var access: PersonArchiveAccess = .writable
 
@@ -29,6 +31,10 @@ final class PersonArchiveRepository {
 
     private var draftsURL: URL {
         archiveRoot.appendingPathComponent("selection_drafts.json")
+    }
+
+    private var versionsURL: URL {
+        archiveRoot.appendingPathComponent("organization_versions.json")
     }
 
     init(archiveRoot: URL, now: @escaping () -> Date = Date.init) {
@@ -55,9 +61,17 @@ final class PersonArchiveRepository {
         )
         draftsFile = draftsResult.value
 
+        let versionsResult = AtomicJSONFileStore.load(
+            OrganizationVersionsFile.self,
+            from: versionsURL,
+            defaultValue: OrganizationVersionsFile()
+        )
+        versionsFile = versionsResult.value
+
         let readOnlyReasons = [
             readOnlyReason(for: peopleResult.access, fileName: "people.json"),
-            readOnlyReason(for: draftsResult.access, fileName: "selection_drafts.json")
+            readOnlyReason(for: draftsResult.access, fileName: "selection_drafts.json"),
+            readOnlyReason(for: versionsResult.access, fileName: "organization_versions.json")
         ].compactMap { $0 }
         guard readOnlyReasons.isEmpty else {
             access = .readOnly(reason: readOnlyReasons.joined(separator: "\n"))
@@ -80,6 +94,15 @@ final class PersonArchiveRepository {
                 try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
             } catch {
                 access = .readOnly(reason: Self.draftsRecoveryFailureReason)
+                return
+            }
+        }
+
+        if case .recoveredFromBackup = versionsResult.access {
+            do {
+                try AtomicJSONFileStore.save(versionsFile, to: versionsURL)
+            } catch {
+                access = .readOnly(reason: Self.versionsRecoveryFailureReason)
                 return
             }
         }
@@ -113,6 +136,24 @@ final class PersonArchiveRepository {
             )
         }
         try saveDrafts()
+    }
+
+    func versions(for personID: String) -> [PersonOrganizationVersion] {
+        versionsFile.versions
+            .filter { $0.personID == personID }
+            .sorted { lhs, rhs in
+                if lhs.createdAt == rhs.createdAt {
+                    return lhs.id < rhs.id
+                }
+                return lhs.createdAt > rhs.createdAt
+            }
+    }
+
+    func appendOrganizationVersion(_ version: PersonOrganizationVersion) throws {
+        try requireWritable()
+        try requireExistingResultFile(atPath: version.resultPath)
+        versionsFile.versions.append(version)
+        try saveVersions()
     }
 
     func clearDraft(for personID: String) throws {
@@ -425,6 +466,10 @@ final class PersonArchiveRepository {
         try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
     }
 
+    private func saveVersions() throws {
+        try AtomicJSONFileStore.save(versionsFile, to: versionsURL)
+    }
+
     private func savePeopleThenPruneDrafts() throws {
         try savePeople()
         do {
@@ -432,6 +477,18 @@ final class PersonArchiveRepository {
         } catch {
             access = .readOnly(reason: Self.draftSyncFailureReason)
             throw PersonArchiveError.readOnly(Self.draftSyncFailureReason)
+        }
+    }
+
+    private func requireExistingResultFile(atPath path: String) throws {
+        var isDirectory: ObjCBool = false
+        guard !path.isEmpty,
+              FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            throw CocoaError(
+                .fileNoSuchFile,
+                userInfo: [NSFilePathErrorKey: path]
+            )
         }
     }
 
