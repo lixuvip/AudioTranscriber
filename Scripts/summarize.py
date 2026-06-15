@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 VoiceScribe - 摘要脚本
-用法: python3 summarize.py <转写文本路径> <模型名> [--api-base URL] [--api-key KEY] [--provider-type TYPE]
+用法: python3 summarize.py <转写文本路径> <模型名> [--api-base URL] [--api-key KEY] [--provider-type TYPE] [--output-path PATH] [--document-title TITLE]
 """
 import os
 import sys
@@ -9,6 +9,11 @@ import argparse
 import json
 import urllib.request
 import urllib.error
+
+
+class ScriptError(RuntimeError):
+    pass
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("text_path")
@@ -49,6 +54,18 @@ api_base = args.api_base or os.environ.get("OPENAI_API_BASE", default_api_base)
 
 if not api_key:
     print("[VoiceScribe] 错误: 请设置 OPENAI_API_KEY 环境变量")
+    sys.exit(1)
+
+out_dir = os.path.dirname(out_path) or "."
+try:
+    os.makedirs(out_dir, exist_ok=True)
+    if os.path.isdir(out_path):
+        raise ScriptError("输出路径是目录，不能写入摘要文件")
+except ScriptError as e:
+    print(f"[VoiceScribe] 摘要保存失败: {e}")
+    sys.exit(1)
+except Exception as e:
+    print(f"[VoiceScribe] 摘要保存失败: {type(e).__name__}")
     sys.exit(1)
 
 prompt = f"""请阅读以下通话记录，生成一份简明摘要，包含：
@@ -128,7 +145,7 @@ try:
             summary = response.choices[0].message.content or ""
 
     if not summary.strip():
-        raise RuntimeError("模型返回为空，未生成摘要内容")
+        raise ScriptError("模型返回为空，未生成摘要内容")
 except urllib.error.HTTPError as e:
     hint = ""
     if e.code == 404:
@@ -137,14 +154,15 @@ except urllib.error.HTTPError as e:
         hint = "（提示：API Key 无效或无权访问该模型）"
     print(f"[VoiceScribe] LLM 调用失败: HTTP {e.code}{hint}")
     sys.exit(1)
+except ScriptError as e:
+    print(f"[VoiceScribe] LLM 调用失败: {e}")
+    sys.exit(1)
 except Exception as e:
     print(f"[VoiceScribe] LLM 调用失败: {type(e).__name__}")
     sys.exit(1)
 
-out_dir = os.path.dirname(out_path) or "."
 temp_path = f"{out_path}.{os.getpid()}.tmp"
 try:
-    os.makedirs(out_dir, exist_ok=True)
     with open(temp_path, 'w', encoding='utf-8') as f:
         f.write(
             f"# {args.document_title}\n\n"
