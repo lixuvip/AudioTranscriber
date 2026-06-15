@@ -140,12 +140,12 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .callRecordArchiveWriterDidWrite)) { notification in
-            guard let archiveRoot = notification.object as? URL,
-                  archiveRoot == callRecordArchiveRoot(),
-                  personTimelineStore.archiveRoot == archiveRoot else {
+            guard let archiveRoot = notification.object as? URL else {
                 return
             }
-            try? personTimelineStore.reload()
+            Task { @MainActor in
+                reloadPersonArchiveIfNeeded(writtenArchiveRoot: archiveRoot)
+            }
         }
         .onChange(of: envChecker.selectedPerformanceTier) { tier in
             settingsManager.performanceTier = tier.rawValue
@@ -611,6 +611,24 @@ struct ContentView: View {
         } catch {
             personTimelineStore.present(error)
         }
+    }
+
+    @MainActor
+    private func reloadPersonArchiveIfNeeded(writtenArchiveRoot: URL) {
+        guard let currentArchiveRoot = personTimelineStore.archiveRoot,
+              canonicalArchiveRoot(writtenArchiveRoot) == canonicalArchiveRoot(currentArchiveRoot) else {
+            return
+        }
+
+        do {
+            try personTimelineStore.reload()
+        } catch {
+            personTimelineStore.present(error)
+        }
+    }
+
+    private func canonicalArchiveRoot(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
     }
 
     // MARK: - Logs Tab
