@@ -145,7 +145,7 @@ struct PersonListPane: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
-                    Text(personDetail(for: person, isSelected: isSelected))
+                    Text(personDetail(for: person))
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -182,24 +182,13 @@ struct PersonListPane: View {
         }
     }
 
-    private func personDetail(for person: PersonRecord, isSelected: Bool) -> String {
+    private func personDetail(for person: PersonRecord) -> String {
+        let summary = store.callSummary(for: person.id)
         let phoneCount = "\(person.phoneNumbers.count) 个号码"
-        guard isSelected else {
-            let phones = person.phoneNumbers.prefix(2).joined(separator: "、")
-            return phones.isEmpty ? phoneCount : "\(phoneCount) · \(phones)"
-        }
-
-        let callCount = "\(store.calls.count) 通"
-        if let latestCall = store.calls.map(\.entry.callDate).max() {
-            return "\(phoneCount) · \(callCount) · 最近 \(Self.shortDateFormatter.string(from: latestCall))"
+        let callCount = "\(summary.count) 通"
+        if let latestDateText = summary.latestDateText {
+            return "\(phoneCount) · \(callCount) · 最近 \(latestDateText)"
         }
         return "\(phoneCount) · \(callCount)"
     }
-
-    private static let shortDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
 }

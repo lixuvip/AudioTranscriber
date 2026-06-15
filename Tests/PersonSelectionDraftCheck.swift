@@ -12,6 +12,7 @@ struct PersonSelectionDraftCheck {
         try checkDraftSaveFailureAfterPeopleSaveMarksReadOnly()
         try checkDraftCorruptionMakesRepositoryReadOnly()
         try await checkStoreTogglePersistsDraft()
+        try await checkStoreCallSummaryCoversEveryPerson()
         try await checkStoreSelectRecent30Days()
         try await checkStorePrepareOrganizationUsesCurrentSelection()
         try await checkStoreCommitRepairAndClearDraft()
@@ -553,6 +554,76 @@ struct PersonSelectionDraftCheck {
                 Set(["call-a"]),
                 "store draft reloads after opening archive"
             )
+        }
+    }
+
+    private static func checkStoreCallSummaryCoversEveryPerson() async throws {
+        try await withTemporaryDirectoryAsync("store-call-summary") { root in
+            let personA = PersonRecord(
+                id: "person-a",
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            )
+            let personB = PersonRecord(
+                id: "person-b",
+                displayName: "李雷",
+                phoneNumbers: ["13102133750"]
+            )
+            try savePeople([personA, personB], to: root)
+
+            let callAOld = try makeAvailableCall(
+                root: root,
+                id: "call-a-old",
+                name: "章文",
+                phone: "15397111188",
+                time: 100
+            )
+            let callB = try makeAvailableCall(
+                root: root,
+                id: "call-b",
+                name: "李雷",
+                phone: "13102133750",
+                time: 200
+            )
+            let callANew = try makeAvailableCall(
+                root: root,
+                id: "call-a-new",
+                name: "章文",
+                phone: "15397111188",
+                time: 300
+            )
+            try saveIndex([callAOld, callB, callANew], to: root)
+
+            let store = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try store.openArchive(root)
+            }
+
+            let summaryA = await MainActor.run {
+                store.callSummary(for: personA.id)
+            }
+            assertEqual(summaryA.count, 2, "store summary counts all person calls")
+            assertEqual(
+                summaryA.latestDateText,
+                "time300",
+                "store summary uses latest person call date"
+            )
+
+            let summaryB = await MainActor.run {
+                store.callSummary(for: personB.id)
+            }
+            assertEqual(summaryB.count, 1, "store summary counts non-selected person")
+            assertEqual(
+                summaryB.latestDateText,
+                "time200",
+                "store summary latest date works for non-selected person"
+            )
+
+            let missing = await MainActor.run {
+                store.callSummary(for: "missing-person")
+            }
+            assertEqual(missing.count, 0, "missing person summary has zero calls")
+            assertEqual(missing.latestDateText, nil, "missing person summary has no latest date")
         }
     }
 

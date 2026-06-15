@@ -388,6 +388,25 @@ struct PersonArchiveRepositoryCheck {
                 transcript.path,
                 "timeline falls back to transcript path"
             )
+            let missingProofread = makeCall(
+                id: "call-b2",
+                name: "章文",
+                phone: "15397111188",
+                time: 250,
+                outputDirectoryPath: outputDir.path,
+                transcriptPath: transcript.path,
+                speakerTextPath: outputDir.appendingPathComponent("missing-proofread.md").path
+            )
+            assertEqual(
+                PersonTimelineCall(entry: missingProofread).preferredSourcePath,
+                transcript.path,
+                "timeline falls back to transcript when proofread file is missing"
+            )
+            assertEqual(
+                PersonTimelineCall(entry: missingProofread).isAvailable,
+                true,
+                "timeline remains available when transcript fallback exists"
+            )
             let missing = makeCall(
                 id: "call-c",
                 name: "章文",

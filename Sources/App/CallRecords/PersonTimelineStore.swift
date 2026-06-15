@@ -48,6 +48,14 @@ final class PersonTimelineStore: ObservableObject {
         try openArchive(archiveRoot)
     }
 
+    func callSummary(for personID: String) -> (count: Int, latestDateText: String?) {
+        guard let repository else {
+            return (0, nil)
+        }
+        let personCalls = repository.calls(for: personID)
+        return (personCalls.count, personCalls.first?.callDateText)
+    }
+
     func selectPerson(_ id: String) {
         guard people.contains(where: { $0.id == id }) else {
             refreshSelectedPerson(nil)

@@ -233,24 +233,26 @@ private extension PersonTimelineCall {
     }
 
     var sourceStatus: SourceStatus {
-        guard isAvailable else {
-            if preferredSourcePath.isEmpty {
-                return SourceStatus(
-                    title: "缺失",
-                    isAvailable: false,
-                    reason: "来源缺失：没有整理版或通话记录路径"
-                )
+        if let kind = preferredSourceKind {
+            switch kind {
+            case .proofread:
+                return SourceStatus(title: "整理版", isAvailable: true, reason: "")
+            case .transcript:
+                return SourceStatus(title: "通话记录", isAvailable: true, reason: "")
             }
+        }
+
+        if preferredSourcePath.isEmpty {
             return SourceStatus(
                 title: "缺失",
                 isAvailable: false,
-                reason: "来源缺失：首选来源文件不存在"
+                reason: "来源缺失：没有整理版或通话记录路径"
             )
         }
-
-        if !entry.speakerTextPath.isEmpty {
-            return SourceStatus(title: "整理版", isAvailable: true, reason: "")
-        }
-        return SourceStatus(title: "通话记录", isAvailable: true, reason: "")
+        return SourceStatus(
+            title: "缺失",
+            isAvailable: false,
+            reason: "来源缺失：整理版和通话记录文件均不可读取"
+        )
     }
 }

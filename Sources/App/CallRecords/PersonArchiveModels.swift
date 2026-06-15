@@ -324,12 +324,37 @@ struct PersonTimelineCall: Identifiable, Equatable {
     }
 
     var preferredSourcePath: String {
-        entry.speakerTextPath.isEmpty ? entry.transcriptPath : entry.speakerTextPath
+        if let source = preferredSource {
+            return source.path
+        }
+        return entry.speakerTextPath.isEmpty ? entry.transcriptPath : entry.speakerTextPath
+    }
+
+    var preferredSourceKind: PersonOrganizationSourceKind? {
+        preferredSource?.kind
     }
 
     var isAvailable: Bool {
-        !preferredSourcePath.isEmpty
-            && FileManager.default.fileExists(atPath: preferredSourcePath)
+        preferredSource != nil
+    }
+
+    private var preferredSource: (kind: PersonOrganizationSourceKind, path: String)? {
+        let candidates: [(PersonOrganizationSourceKind, String)] = [
+            (.proofread, entry.speakerTextPath),
+            (.transcript, entry.transcriptPath)
+        ]
+
+        for (kind, path) in candidates where Self.isReadableFile(atPath: path) {
+            return (kind, path)
+        }
+        return nil
+    }
+
+    private static func isReadableFile(atPath path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && !isDirectory.boolValue
     }
 }
 
