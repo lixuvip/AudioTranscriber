@@ -2,7 +2,7 @@ import Foundation
 
 @main
 struct PersonSelectionDraftCheck {
-    static func main() throws {
+    static func main() async throws {
         try checkBasicPrunePersistAndClear()
         try checkUnavailableCallsArePruned()
         try checkSplitPrunesDraftsAfterOwnershipChange()
@@ -11,6 +11,10 @@ struct PersonSelectionDraftCheck {
         try checkDraftBackupRecoverySaveFailureUsesSafeMessage()
         try checkDraftSaveFailureAfterPeopleSaveMarksReadOnly()
         try checkDraftCorruptionMakesRepositoryReadOnly()
+        try await checkStoreTogglePersistsDraft()
+        try await checkStoreSelectRecent30Days()
+        try await checkStorePrepareOrganizationUsesCurrentSelection()
+        try await checkStoreCommitRepairAndClearDraft()
         print("PersonSelectionDraftCheck passed")
     }
 
@@ -501,6 +505,247 @@ struct PersonSelectionDraftCheck {
         }
     }
 
+    private static func checkStoreTogglePersistsDraft() async throws {
+        try await withTemporaryDirectoryAsync("store-toggle-persists-draft") { root in
+            let person = PersonRecord(
+                id: "person-a",
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            )
+            try savePeople([person], to: root)
+            let callA = try makeAvailableCall(
+                root: root,
+                id: "call-a",
+                name: "章文",
+                phone: "15397111188",
+                time: 100
+            )
+            let callB = try makeAvailableCall(
+                root: root,
+                id: "call-b",
+                name: "章文",
+                phone: "15397111188",
+                time: 200
+            )
+            try saveIndex([callA, callB], to: root)
+
+            let store = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try store.openArchive(root)
+                store.selectPerson(person.id)
+                try store.toggleCall("call-a")
+            }
+            assertEqual(
+                await MainActor.run { store.selectedCallIDs },
+                Set(["call-a"]),
+                "store toggles whole call"
+            )
+
+            let reloaded = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try reloaded.openArchive(root)
+                reloaded.selectPerson(person.id)
+            }
+            assertEqual(
+                await MainActor.run { reloaded.selectedCallIDs },
+                Set(["call-a"]),
+                "store draft reloads after opening archive"
+            )
+        }
+    }
+
+    private static func checkStoreSelectRecent30Days() async throws {
+        try await withTemporaryDirectoryAsync("store-recent-thirty-days") { root in
+            let referenceDate = Date(timeIntervalSince1970: 1_000_000)
+            let person = PersonRecord(
+                id: "person-a",
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            )
+            try savePeople([person], to: root)
+            let recent = try makeAvailableCall(
+                root: root,
+                id: "call-recent",
+                name: "章文",
+                phone: "15397111188",
+                time: referenceDate.timeIntervalSince1970 - 10 * 24 * 60 * 60
+            )
+            let old = try makeAvailableCall(
+                root: root,
+                id: "call-old",
+                name: "章文",
+                phone: "15397111188",
+                time: referenceDate.timeIntervalSince1970 - 31 * 24 * 60 * 60
+            )
+            let unavailableRecent = makeCall(
+                root: root,
+                id: "call-missing",
+                name: "章文",
+                phone: "15397111188",
+                time: referenceDate.timeIntervalSince1970 - 2 * 24 * 60 * 60,
+                transcriptPath: root.appendingPathComponent("missing.md").path,
+                speakerTextPath: ""
+            )
+            try saveIndex([recent, old, unavailableRecent], to: root)
+
+            let store = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try store.openArchive(root)
+                store.selectPerson(person.id)
+                try store.selectRecent30Days(referenceDate: referenceDate)
+            }
+            assertEqual(
+                await MainActor.run { store.selectedCallIDs },
+                Set(["call-recent"]),
+                "store recent shortcut selects only recent available calls"
+            )
+        }
+    }
+
+    private static func checkStorePrepareOrganizationUsesCurrentSelection() async throws {
+        try await withTemporaryDirectoryAsync("store-prepare-current-selection") { root in
+            let person = PersonRecord(
+                id: "person-a",
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            )
+            try savePeople([person], to: root)
+            let callA = try makeAvailableCall(
+                root: root,
+                id: "call-a",
+                name: "章文",
+                phone: "15397111188",
+                time: 100
+            )
+            let callB = try makeAvailableCall(
+                root: root,
+                id: "call-b",
+                name: "章文",
+                phone: "15397111188",
+                time: 200
+            )
+            try saveIndex([callB, callA], to: root)
+
+            let store = await MainActor.run { PersonTimelineStore() }
+            let preparation = try await MainActor.run {
+                try store.openArchive(root)
+                store.selectPerson(person.id)
+                try store.toggleCall("call-b")
+                return try store.prepareOrganization()
+            }
+            assertEqual(
+                preparation.callIDs,
+                ["call-b"],
+                "store prepare uses current selected IDs"
+            )
+            assertEqual(
+                preparation.markdown.contains("call-a"),
+                false,
+                "store prepare excludes unselected calls"
+            )
+        }
+    }
+
+    private static func checkStoreCommitRepairAndClearDraft() async throws {
+        try await withTemporaryDirectoryAsync("store-commit-repair-clear-draft") { root in
+            let person = PersonRecord(
+                id: "person-a",
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            )
+            try savePeople([person], to: root)
+            let call = try makeAvailableCall(
+                root: root,
+                id: "call-a",
+                name: "章文",
+                phone: "15397111188",
+                time: 100
+            )
+            try saveIndex([call], to: root)
+
+            let committedResult = root.appendingPathComponent("committed.md")
+            try "committed".write(to: committedResult, atomically: true, encoding: .utf8)
+            let store = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try store.openArchive(root)
+                store.selectPerson(person.id)
+                try store.toggleCall("call-a")
+                try store.commitOrganizationVersion(
+                    makeVersion(
+                        id: "version-committed",
+                        personID: person.id,
+                        createdAt: Date(timeIntervalSince1970: 200),
+                        resultPath: committedResult.path
+                    )
+                )
+            }
+            assertEqual(
+                await MainActor.run { store.selectedCallIDs },
+                [],
+                "store commit clears draft"
+            )
+            assertEqual(
+                await MainActor.run { store.versions.map(\.id) },
+                ["version-committed"],
+                "store commit appends version"
+            )
+
+            let repairResult = root.appendingPathComponent("repair.md")
+            let repairVersion = makeVersion(
+                id: "version-repair",
+                personID: person.id,
+                createdAt: Date(timeIntervalSince1970: 300),
+                resultPath: repairResult.path
+            )
+            do {
+                try await MainActor.run {
+                    try store.toggleCall("call-a")
+                    try store.commitOrganizationVersion(repairVersion)
+                }
+                fatalError("missing result should leave a pending repair")
+            } catch let error as CocoaError {
+                assertEqual(
+                    error.code,
+                    CocoaError.Code.fileNoSuchFile,
+                    "store failed append surfaces missing result"
+                )
+            } catch {
+                fatalError("expected missing result CocoaError, got \(error)")
+            }
+
+            assertEqual(
+                await MainActor.run { store.pendingVersionRepair?.id },
+                "version-repair",
+                "store keeps failed version for repair"
+            )
+            assertEqual(
+                await MainActor.run { store.selectedCallIDs },
+                Set(["call-a"]),
+                "store failed commit preserves draft"
+            )
+
+            try "repaired".write(to: repairResult, atomically: true, encoding: .utf8)
+            try await MainActor.run {
+                try store.repairVersionIndex()
+            }
+            assertEqual(
+                await MainActor.run { store.pendingVersionRepair },
+                nil,
+                "store repair clears pending version"
+            )
+            assertEqual(
+                await MainActor.run { store.selectedCallIDs },
+                [],
+                "store repair clears draft"
+            )
+            assertEqual(
+                await MainActor.run { store.versions.map(\.id) },
+                ["version-repair", "version-committed"],
+                "store repair appends version after fixing result"
+            )
+        }
+    }
+
     private static func savePeople(_ people: [PersonRecord], to root: URL) throws {
         try AtomicJSONFileStore.save(
             PeopleFile(people: people),
@@ -515,6 +760,50 @@ struct PersonSelectionDraftCheck {
         try AtomicJSONFileStore.save(
             drafts,
             to: root.appendingPathComponent("selection_drafts.json")
+        )
+    }
+
+    private static func saveIndex(
+        _ entries: [CallRecordIndexEntry],
+        to root: URL
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(entries).write(to: root.appendingPathComponent("call_index.json"))
+    }
+
+    private static func makeVersion(
+        id: String,
+        personID: String,
+        createdAt: Date,
+        resultPath: String
+    ) -> PersonOrganizationVersion {
+        PersonOrganizationVersion(
+            id: id,
+            personID: personID,
+            personSnapshot: PersonSnapshot(
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            ),
+            callIDs: ["call-a"],
+            sourceSnapshots: [
+                PersonOrganizationSourceSnapshot(
+                    callID: "call-a",
+                    sourceKind: .proofread,
+                    sourcePath: "/tmp/call-a.md",
+                    contentHash: "sha256:abc"
+                )
+            ],
+            modelID: "gpt-test",
+            templateID: "template-a",
+            customPrompt: "prompt",
+            createdAt: createdAt,
+            resultPath: resultPath
         )
     }
 
@@ -592,6 +881,23 @@ struct PersonSelectionDraftCheck {
         )
         defer { try? FileManager.default.removeItem(at: root) }
         try body(root)
+    }
+
+    private static func withTemporaryDirectoryAsync(
+        _ label: String,
+        body: (URL) async throws -> Void
+    ) async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(
+                "PersonSelectionDraftCheck-\(label)-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await body(root)
     }
 
     private static func assertThrowsReadOnly(
