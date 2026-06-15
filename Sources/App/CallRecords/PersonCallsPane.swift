@@ -88,8 +88,8 @@ struct PersonCallsPane: View {
                     .frame(width: 24)
             }
             .buttonStyle(.plain)
-            .disabled(!call.isAvailable || isReadOnly)
-            .help(call.isAvailable ? "选择整段通话" : source.reason)
+            .disabled((!call.isAvailable && !isSelected) || isReadOnly)
+            .help(call.isAvailable || isSelected ? "选择整段通话" : source.reason)
 
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {

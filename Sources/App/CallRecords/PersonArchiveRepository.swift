@@ -4,11 +4,13 @@ final class PersonArchiveRepository {
     private static let peopleRecoveryFailureReason = "已读取备份，但无法恢复 people.json，请重新载入归档"
     private static let draftsRecoveryFailureReason = "已读取备份，但无法恢复 selection_drafts.json，请重新载入归档"
     private static let versionsRecoveryFailureReason = "已读取备份，但无法恢复 organization_versions.json，请重新载入归档"
+    private static let pendingRepairRecoveryFailureReason = "已读取备份，但无法恢复 organization_pending_repair.json，请重新载入归档"
     private static let draftSyncFailureReason = "人物归档已保存，但选择草稿未能同步，请重新载入归档"
 
     private(set) var peopleFile = PeopleFile()
     private(set) var draftsFile = SelectionDraftsFile()
     private(set) var versionsFile = OrganizationVersionsFile()
+    private(set) var pendingRepairFile = PendingOrganizationRepairFile()
     private(set) var indexEntries: [CallRecordIndexEntry] = []
     private(set) var access: PersonArchiveAccess = .writable
 
@@ -20,6 +22,10 @@ final class PersonArchiveRepository {
             }
             return comparison == .orderedAscending
         }
+    }
+
+    var pendingVersionRepair: PersonOrganizationVersion? {
+        pendingRepairFile.version
     }
 
     private let archiveRoot: URL
@@ -35,6 +41,10 @@ final class PersonArchiveRepository {
 
     private var versionsURL: URL {
         archiveRoot.appendingPathComponent("organization_versions.json")
+    }
+
+    private var pendingRepairURL: URL {
+        archiveRoot.appendingPathComponent("organization_pending_repair.json")
     }
 
     init(archiveRoot: URL, now: @escaping () -> Date = Date.init) {
@@ -68,10 +78,21 @@ final class PersonArchiveRepository {
         )
         versionsFile = versionsResult.value
 
+        let pendingRepairResult = AtomicJSONFileStore.load(
+            PendingOrganizationRepairFile.self,
+            from: pendingRepairURL,
+            defaultValue: PendingOrganizationRepairFile()
+        )
+        pendingRepairFile = pendingRepairResult.value
+
         let readOnlyReasons = [
             readOnlyReason(for: peopleResult.access, fileName: "people.json"),
             readOnlyReason(for: draftsResult.access, fileName: "selection_drafts.json"),
-            readOnlyReason(for: versionsResult.access, fileName: "organization_versions.json")
+            readOnlyReason(for: versionsResult.access, fileName: "organization_versions.json"),
+            readOnlyReason(
+                for: pendingRepairResult.access,
+                fileName: "organization_pending_repair.json"
+            )
         ].compactMap { $0 }
         guard readOnlyReasons.isEmpty else {
             access = .readOnly(reason: readOnlyReasons.joined(separator: "\n"))
@@ -107,6 +128,15 @@ final class PersonArchiveRepository {
             }
         }
 
+        if case .recoveredFromBackup = pendingRepairResult.access {
+            do {
+                try AtomicJSONFileStore.save(pendingRepairFile, to: pendingRepairURL)
+            } catch {
+                access = .readOnly(reason: Self.pendingRepairRecoveryFailureReason)
+                return
+            }
+        }
+
         access = .writable
         if sanitizedPeopleFile && !savedPeopleDuringRecovery {
             try savePeople()
@@ -121,12 +151,12 @@ final class PersonArchiveRepository {
 
     func draftCallIDs(for personID: String) -> Set<String> {
         Set(draftsFile.drafts[personID]?.callIDs ?? [])
-            .intersection(availableCallIDs(for: personID))
+            .intersection(personCallIDs(for: personID))
     }
 
     func setDraftCallIDs(_ callIDs: Set<String>, for personID: String) throws {
         try requireWritable()
-        let pruned = callIDs.intersection(availableCallIDs(for: personID))
+        let pruned = callIDs.intersection(personCallIDs(for: personID))
         var stagedDraftsFile = draftsFile
         if pruned.isEmpty {
             stagedDraftsFile.drafts.removeValue(forKey: personID)
@@ -168,7 +198,7 @@ final class PersonArchiveRepository {
     }
 
     func selectAllAvailableCalls(for personID: String) throws {
-        try setDraftCallIDs(availableCallIDs(for: personID), for: personID)
+        try setDraftCallIDs(readableCallIDs(for: personID), for: personID)
     }
 
     func selectRecentCalls(for personID: String, since date: Date) throws {
@@ -176,7 +206,7 @@ final class PersonArchiveRepository {
             calls(for: personID)
                 .filter {
                     $0.callDate >= date
-                        && PersonTimelineCall(entry: $0).isAvailable
+                        && PersonTimelineCall(entry: $0, resolvedSource: source(for: $0)).isAvailable
                 }
                 .map(\.id)
         )
@@ -291,6 +321,7 @@ final class PersonArchiveRepository {
         guard var target = beforePeople.first(where: { $0.id == targetPersonID }) else {
             throw PersonArchiveError.personNotFound(targetPersonID)
         }
+        let draftsBeforeMerge = draftsFile
         target.displayName = displayName
         target.phoneNumbers = uniquePhones(beforePeople.flatMap(\.phoneNumbers))
         target.updatedAt = stableNow()
@@ -305,7 +336,11 @@ final class PersonArchiveRepository {
             )
         )
         removeUnassignedPhones(target.phoneNumbers)
-        try savePeopleThenPruneDrafts()
+        migrateDraftsAfterMerge(
+            selectedPersonIDs: selectedIDSet,
+            targetPersonID: targetPersonID
+        )
+        try savePeopleThenPruneDrafts(forceDraftSave: draftsFile != draftsBeforeMerge)
         return target
     }
 
@@ -374,21 +409,57 @@ final class PersonArchiveRepository {
         }
 
         let merge = peopleFile.mergeHistory[mergeIndex]
-        let restoredIDs = Set(merge.beforePeople.map(\.id))
-        let allowedExistingOwnerIDs = restoredIDs.union([merge.targetPersonID])
-        for phone in uniquePhones(merge.beforePeople.flatMap(\.phoneNumbers)) {
+        guard let targetBeforeMerge = merge.beforePeople.first(
+            where: { $0.id == merge.targetPersonID }
+        ) else {
+            throw PersonArchiveError.personNotFound(merge.targetPersonID)
+        }
+        let sourcePeople = merge.beforePeople.filter { $0.id != merge.targetPersonID }
+        let sourceIDs = Set(sourcePeople.map(\.id))
+        let allowedExistingOwnerIDs = sourceIDs.union([merge.targetPersonID])
+        let sourcePhones = uniquePhones(sourcePeople.flatMap(\.phoneNumbers))
+        for phone in sourcePhones {
             if let ownerID = ownerID(for: phone, excluding: allowedExistingOwnerIDs) {
                 throw PersonArchiveError.phoneConflict(phone: phone, ownerID: ownerID)
             }
         }
 
+        let draftsBeforeRevert = draftsFile
         peopleFile.people.removeAll {
-            restoredIDs.contains($0.id) || $0.id == merge.targetPersonID
+            sourceIDs.contains($0.id)
         }
-        peopleFile.people.append(contentsOf: merge.beforePeople)
+        if let targetIndex = peopleFile.people.firstIndex(where: { $0.id == merge.targetPersonID }) {
+            peopleFile.people[targetIndex].phoneNumbers = uniquePhones(
+                peopleFile.people[targetIndex].phoneNumbers.filter {
+                    !sourcePhones.contains(normalizePhone($0))
+                }
+            )
+            peopleFile.people[targetIndex].updatedAt = stableNow()
+        } else {
+            for phone in targetBeforeMerge.phoneNumbers {
+                if let ownerID = ownerID(for: phone, excluding: [merge.targetPersonID]) {
+                    throw PersonArchiveError.phoneConflict(phone: phone, ownerID: ownerID)
+                }
+            }
+            peopleFile.people.append(targetBeforeMerge)
+        }
+        peopleFile.people.append(contentsOf: sourcePeople)
         peopleFile.mergeHistory[mergeIndex].revertedAt = stableNow()
         removeUnassignedPhones(merge.beforePeople.flatMap(\.phoneNumbers))
-        try savePeopleThenPruneDrafts()
+        migrateDraftsAfterRevertingMerge(merge)
+        try savePeopleThenPruneDrafts(forceDraftSave: draftsFile != draftsBeforeRevert)
+    }
+
+    func recordPendingVersionRepair(_ version: PersonOrganizationVersion) throws {
+        try requireWritable()
+        pendingRepairFile = PendingOrganizationRepairFile(version: version)
+        try AtomicJSONFileStore.save(pendingRepairFile, to: pendingRepairURL)
+    }
+
+    func clearPendingVersionRepair() throws {
+        try requireWritable()
+        pendingRepairFile = PendingOrganizationRepairFile()
+        try AtomicJSONFileStore.save(pendingRepairFile, to: pendingRepairURL)
     }
 
     private func readOnlyReason(
@@ -477,10 +548,10 @@ final class PersonArchiveRepository {
         try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
     }
 
-    private func savePeopleThenPruneDrafts() throws {
+    private func savePeopleThenPruneDrafts(forceDraftSave: Bool = false) throws {
         try savePeople()
         do {
-            try pruneAllDrafts()
+            try pruneAllDrafts(forceSave: forceDraftSave)
         } catch {
             access = .readOnly(reason: Self.draftSyncFailureReason)
             throw PersonArchiveError.readOnly(Self.draftSyncFailureReason)
@@ -499,20 +570,24 @@ final class PersonArchiveRepository {
         }
     }
 
-    private func availableCallIDs(for personID: String) -> Set<String> {
+    private func personCallIDs(for personID: String) -> Set<String> {
+        Set(calls(for: personID).map(\.id))
+    }
+
+    private func readableCallIDs(for personID: String) -> Set<String> {
         Set(
             calls(for: personID)
-                .filter { PersonTimelineCall(entry: $0).isAvailable }
+                .filter { PersonTimelineCall(entry: $0, resolvedSource: source(for: $0)).isAvailable }
                 .map(\.id)
         )
     }
 
-    private func pruneAllDrafts() throws {
+    private func pruneAllDrafts(forceSave: Bool = false) throws {
         var prunedDrafts = draftsFile.drafts
         var didChange = false
 
         for (personID, draft) in draftsFile.drafts {
-            let validCallIDs = availableCallIDs(for: personID)
+            let validCallIDs = personCallIDs(for: personID)
             let prunedCallIDs = Set(draft.callIDs)
                 .intersection(validCallIDs)
                 .sorted()
@@ -528,9 +603,83 @@ final class PersonArchiveRepository {
             }
         }
 
-        guard didChange else { return }
+        guard didChange || forceSave else { return }
         draftsFile.drafts = prunedDrafts
         try saveDrafts()
+    }
+
+    private func source(for entry: CallRecordIndexEntry) -> PersonTimelineCall.SourceResolution {
+        PersonTimelineCall.resolveSource(for: entry, archiveRoot: archiveRoot)
+    }
+
+    private func migrateDraftsAfterMerge(
+        selectedPersonIDs: Set<String>,
+        targetPersonID: String
+    ) {
+        let mergedCallIDs = Set(
+            selectedPersonIDs.flatMap { draftsFile.drafts[$0]?.callIDs ?? [] }
+        )
+        var stagedDraftsFile = draftsFile
+        for personID in selectedPersonIDs where personID != targetPersonID {
+            stagedDraftsFile.drafts.removeValue(forKey: personID)
+        }
+
+        let targetCallIDs = mergedCallIDs
+            .union(Set(stagedDraftsFile.drafts[targetPersonID]?.callIDs ?? []))
+            .intersection(personCallIDs(for: targetPersonID))
+            .sorted()
+        if targetCallIDs.isEmpty {
+            stagedDraftsFile.drafts.removeValue(forKey: targetPersonID)
+        } else {
+            stagedDraftsFile.drafts[targetPersonID] = PersonSelectionDraft(
+                callIDs: targetCallIDs,
+                updatedAt: stableNow()
+            )
+        }
+        draftsFile = stagedDraftsFile
+    }
+
+    private func migrateDraftsAfterRevertingMerge(_ merge: PersonMergeRecord) {
+        let targetDraftCallIDs = Set(
+            draftsFile.drafts[merge.targetPersonID]?.callIDs ?? []
+        )
+        guard !targetDraftCallIDs.isEmpty else { return }
+
+        let sourcePeople = merge.beforePeople.filter { $0.id != merge.targetPersonID }
+        var stagedDraftsFile = draftsFile
+        var remainingTargetCallIDs = targetDraftCallIDs
+
+        for sourcePerson in sourcePeople {
+            let sourceCallIDs = personCallIDs(for: sourcePerson.id)
+            let movedCallIDs = targetDraftCallIDs.intersection(sourceCallIDs)
+            guard !movedCallIDs.isEmpty else { continue }
+
+            let existingCallIDs = Set(
+                stagedDraftsFile.drafts[sourcePerson.id]?.callIDs ?? []
+            )
+            let nextSourceCallIDs = existingCallIDs
+                .union(movedCallIDs)
+                .intersection(sourceCallIDs)
+                .sorted()
+            stagedDraftsFile.drafts[sourcePerson.id] = PersonSelectionDraft(
+                callIDs: nextSourceCallIDs,
+                updatedAt: stableNow()
+            )
+            remainingTargetCallIDs.subtract(movedCallIDs)
+        }
+
+        let targetCallIDs = remainingTargetCallIDs
+            .intersection(personCallIDs(for: merge.targetPersonID))
+            .sorted()
+        if targetCallIDs.isEmpty {
+            stagedDraftsFile.drafts.removeValue(forKey: merge.targetPersonID)
+        } else {
+            stagedDraftsFile.drafts[merge.targetPersonID] = PersonSelectionDraft(
+                callIDs: targetCallIDs,
+                updatedAt: stableNow()
+            )
+        }
+        draftsFile = stagedDraftsFile
     }
 
     private func stableNow() -> Date {

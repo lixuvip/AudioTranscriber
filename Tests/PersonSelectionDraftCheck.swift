@@ -4,7 +4,7 @@ import Foundation
 struct PersonSelectionDraftCheck {
     static func main() async throws {
         try checkBasicPrunePersistAndClear()
-        try checkUnavailableCallsArePruned()
+        try checkUnavailableCallsRemainSelectedWhenOwned()
         try checkSplitPrunesDraftsAfterOwnershipChange()
         try checkStaleDraftsArePrunedOnLoad()
         try checkDraftBackupRecoveryRestoresPrimary()
@@ -110,7 +110,7 @@ struct PersonSelectionDraftCheck {
         }
     }
 
-    private static func checkUnavailableCallsArePruned() throws {
+    private static func checkUnavailableCallsRemainSelectedWhenOwned() throws {
         try withTemporaryDirectory("unavailable-pruning") { root in
             let person = PersonRecord(
                 id: "person-a",
@@ -145,8 +145,8 @@ struct PersonSelectionDraftCheck {
             )
             assertEqual(
                 repository.draftCallIDs(for: person.id),
-                Set(["call-a"]),
-                "unavailable call is pruned from draft"
+                Set(["call-a", "call-missing"]),
+                "unavailable but owned call remains selected"
             )
 
             try repository.selectAllAvailableCalls(for: person.id)
@@ -306,8 +306,8 @@ struct PersonSelectionDraftCheck {
             try repository.load(indexEntries: [available, unavailable])
             assertEqual(
                 repository.draftCallIDs(for: person.id),
-                Set(["call-a"]),
-                "load prunes missing and unavailable draft call IDs"
+                Set(["call-a", "call-missing-source"]),
+                "load prunes unknown draft call IDs but keeps owned unavailable calls"
             )
             assertEqual(
                 repository.draftsFile.drafts["stale-person"],
@@ -319,8 +319,8 @@ struct PersonSelectionDraftCheck {
             try reloaded.load(indexEntries: [available, unavailable])
             assertEqual(
                 reloaded.draftCallIDs(for: person.id),
-                Set(["call-a"]),
-                "load-time pruning is persisted"
+                Set(["call-a", "call-missing-source"]),
+                "load-time pruning persists without deleting owned unavailable calls"
             )
             assertEqual(
                 reloaded.draftsFile.drafts["stale-person"],
@@ -877,24 +877,51 @@ struct PersonSelectionDraftCheck {
                 "store failed commit preserves draft"
             )
 
-            try "repaired".write(to: repairResult, atomically: true, encoding: .utf8)
+            let reloadedForRepair = await MainActor.run { PersonTimelineStore() }
             try await MainActor.run {
-                try store.repairVersionIndex()
+                try reloadedForRepair.openArchive(root)
+                reloadedForRepair.selectPerson(person.id)
             }
             assertEqual(
-                await MainActor.run { store.pendingVersionRepair },
+                await MainActor.run { reloadedForRepair.pendingVersionRepair?.id },
+                Optional(repairVersion.id),
+                "pending repair reloads from archive sidecar"
+            )
+            assertEqual(
+                await MainActor.run { reloadedForRepair.selectedCallIDs },
+                Set(["call-a"]),
+                "pending repair reload preserves draft"
+            )
+
+            try "repaired".write(to: repairResult, atomically: true, encoding: .utf8)
+            try await MainActor.run {
+                try reloadedForRepair.repairVersionIndex()
+            }
+            assertEqual(
+                await MainActor.run { reloadedForRepair.pendingVersionRepair },
                 nil,
                 "store repair clears pending version"
             )
             assertEqual(
-                await MainActor.run { store.selectedCallIDs },
+                await MainActor.run { reloadedForRepair.selectedCallIDs },
                 [],
                 "store repair clears draft"
             )
             assertEqual(
-                await MainActor.run { store.versions.map(\.id) },
+                await MainActor.run { reloadedForRepair.versions.map(\.id) },
                 ["version-repair", "version-committed"],
                 "store repair appends version after fixing result"
+            )
+
+            let reloadedAfterRepair = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try reloadedAfterRepair.openArchive(root)
+                reloadedAfterRepair.selectPerson(person.id)
+            }
+            assertEqual(
+                await MainActor.run { reloadedAfterRepair.pendingVersionRepair },
+                nil,
+                "pending repair sidecar stays clear after successful repair"
             )
         }
     }

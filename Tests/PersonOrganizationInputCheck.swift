@@ -4,9 +4,79 @@ import Foundation
 struct PersonOrganizationInputCheck {
     static func main() throws {
         try checkPreferredSourcesUnavailableAndFrozenSnapshot()
+        try checkArchiveBoundaryRejectsOutsideSources()
         try checkInputErrors()
         try checkCallOrdering()
         print("PersonOrganizationInputCheck passed")
+    }
+
+    private static func checkArchiveBoundaryRejectsOutsideSources() throws {
+        try withTemporaryDirectory("archive-boundary") { root in
+            let outsideURL = root
+                .deletingLastPathComponent()
+                .appendingPathComponent("outside-\(UUID().uuidString).md")
+            defer { try? FileManager.default.removeItem(at: outsideURL) }
+            try "越界内容".write(to: outsideURL, atomically: true, encoding: .utf8)
+
+            let transcriptURL = root.appendingPathComponent("call-a_通话记录.md")
+            try "归档内通话记录".write(
+                to: transcriptURL,
+                atomically: true,
+                encoding: .utf8
+            )
+            let person = PersonRecord(displayName: "章文", phoneNumbers: ["15397111188"])
+            let fallbackCall = makeCall(
+                root: root,
+                id: "call-a",
+                name: "章文",
+                phone: "15397111188",
+                time: 100,
+                transcriptPath: transcriptURL.path,
+                speakerTextPath: outsideURL.path
+            )
+            let outsideOnlyCall = makeCall(
+                root: root,
+                id: "call-b",
+                name: "章文",
+                phone: "15397111188",
+                time: 200,
+                transcriptPath: outsideURL.path,
+                speakerTextPath: ""
+            )
+
+            let preparation = try PersonOrganizationInputBuilder.prepare(
+                person: person,
+                selectedCallIDs: Set(["call-a", "call-b"]),
+                calls: [outsideOnlyCall, fallbackCall],
+                archiveRoot: root
+            )
+
+            assertEqual(
+                preparation.callIDs,
+                ["call-a"],
+                "outside-only source is unavailable"
+            )
+            assertEqual(
+                preparation.sources.map(\.sourceKind),
+                [.transcript],
+                "outside proofread falls back to in-archive transcript"
+            )
+            assertEqual(
+                preparation.unavailableCallIDs,
+                ["call-b"],
+                "outside-only call is reported unavailable"
+            )
+            assertEqual(
+                preparation.markdown.contains("归档内通话记录"),
+                true,
+                "markdown includes in-archive content"
+            )
+            assertEqual(
+                preparation.markdown.contains("越界内容"),
+                false,
+                "markdown excludes outside archive content"
+            )
+        }
     }
 
     private static func checkPreferredSourcesUnavailableAndFrozenSnapshot() throws {

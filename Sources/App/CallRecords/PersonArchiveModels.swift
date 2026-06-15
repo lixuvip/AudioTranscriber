@@ -280,6 +280,33 @@ struct OrganizationVersionsFile: Codable, Equatable {
     }
 }
 
+struct PendingOrganizationRepairFile: Codable, Equatable {
+    var schemaVersion: Int
+    var version: PersonOrganizationVersion?
+
+    init(
+        schemaVersion: Int = 1,
+        version: PersonOrganizationVersion? = nil
+    ) {
+        self.schemaVersion = schemaVersion
+        self.version = version
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        version = try container.decodeIfPresent(
+            PersonOrganizationVersion.self,
+            forKey: .version
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case version
+    }
+}
+
 enum PersonArchiveAccess: Equatable {
     case writable
     case recoveredFromBackup
@@ -336,6 +363,13 @@ struct PersonTimelineCall: Identifiable, Equatable {
             isAvailable: false,
             unavailableReason: "来源缺失：整理版和通话记录文件均不可读取"
         )
+
+        static let outsideArchive = SourceResolution(
+            kind: nil,
+            path: "",
+            isAvailable: false,
+            unavailableReason: "来源缺失：文件路径不在当前归档内"
+        )
     }
 
     let entry: CallRecordIndexEntry
@@ -369,13 +403,29 @@ struct PersonTimelineCall: Identifiable, Equatable {
         sourceResolution.unavailableReason
     }
 
-    static func resolveSource(for entry: CallRecordIndexEntry) -> SourceResolution {
+    static func resolveSource(
+        for entry: CallRecordIndexEntry,
+        archiveRoot: URL? = nil
+    ) -> SourceResolution {
         let candidates: [(PersonOrganizationSourceKind, String)] = [
             (.proofread, entry.speakerTextPath),
             (.transcript, entry.transcriptPath)
         ]
 
-        for (kind, path) in candidates where Self.isReadableFile(atPath: path) {
+        var hasRejectedPath = false
+        for (kind, path) in candidates {
+            guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+            guard Self.isAllowedSourcePath(
+                path,
+                for: entry,
+                archiveRoot: archiveRoot
+            ) else {
+                hasRejectedPath = true
+                continue
+            }
+            guard Self.isReadableFile(atPath: path) else { continue }
             return SourceResolution(
                 kind: kind,
                 path: path,
@@ -385,6 +435,9 @@ struct PersonTimelineCall: Identifiable, Equatable {
         }
         let hasAnyPath = candidates.contains {
             !$0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if hasRejectedPath {
+            return .outsideArchive
         }
         return hasAnyPath ? .unreadableSources : .missingPaths
     }
@@ -399,6 +452,35 @@ struct PersonTimelineCall: Identifiable, Equatable {
             return false
         }
         return true
+    }
+
+    private static func isAllowedSourcePath(
+        _ path: String,
+        for entry: CallRecordIndexEntry,
+        archiveRoot: URL?
+    ) -> Bool {
+        guard let archiveRoot else { return true }
+        let sourceURL = canonicalFileURL(URL(fileURLWithPath: path))
+        let archiveURL = canonicalFileURL(archiveRoot)
+        if isDescendant(sourceURL, of: archiveURL) {
+            return true
+        }
+
+        let outputDirectory = canonicalFileURL(
+            URL(fileURLWithPath: entry.outputDirectoryPath, isDirectory: true)
+        )
+        return isDescendant(outputDirectory, of: archiveURL)
+            && isDescendant(sourceURL, of: outputDirectory)
+    }
+
+    private static func canonicalFileURL(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    private static func isDescendant(_ child: URL, of parent: URL) -> Bool {
+        let childPath = child.path
+        let parentPath = parent.path
+        return childPath == parentPath || childPath.hasPrefix(parentPath + "/")
     }
 }
 

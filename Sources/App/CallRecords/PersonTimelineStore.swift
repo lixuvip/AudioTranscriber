@@ -81,15 +81,12 @@ final class PersonTimelineStore: ObservableObject {
 
     func openArchive(_ root: URL) throws {
         let previousSelection = selectedPersonID
-        let isNewArchive = archiveRoot != root
         let nextRepository = PersonArchiveRepository(archiveRoot: root)
         try nextRepository.load()
 
         repository = nextRepository
         archiveRoot = root
-        if isNewArchive {
-            pendingVersionRepair = nil
-        }
+        pendingVersionRepair = nextRepository.pendingVersionRepair
         refreshArchiveState(preferredPersonID: previousSelection)
     }
 
@@ -121,7 +118,6 @@ final class PersonTimelineStore: ObservableObject {
     func toggleCall(_ id: String) throws {
         guard let selectedPersonID,
               let call = calls.first(where: { $0.id == id }),
-              call.isAvailable,
               let repository else {
             return
         }
@@ -130,6 +126,7 @@ final class PersonTimelineStore: ObservableObject {
         if nextSelection.contains(id) {
             nextSelection.remove(id)
         } else {
+            guard call.isAvailable else { return }
             nextSelection.insert(id)
         }
         try repository.setDraftCallIDs(nextSelection, for: selectedPersonID)
@@ -223,7 +220,8 @@ final class PersonTimelineStore: ObservableObject {
         return try PersonOrganizationInputBuilder.prepare(
             person: person,
             selectedCallIDs: selectedCallIDs,
-            calls: repository.calls(for: selectedPersonID)
+            calls: repository.calls(for: selectedPersonID),
+            archiveRoot: archiveRoot
         )
     }
 
@@ -233,17 +231,28 @@ final class PersonTimelineStore: ObservableObject {
         do {
             try repository.appendOrganizationVersion(version)
         } catch {
-            pendingVersionRepair = version
+            if let repairPersistenceError = rememberPendingVersionRepair(
+                version,
+                repository: repository
+            ) {
+                throw repairPersistenceError
+            }
             throw error
         }
 
         do {
             try repository.clearDraft(for: version.personID)
         } catch {
-            pendingVersionRepair = version
+            if let repairPersistenceError = rememberPendingVersionRepair(
+                version,
+                repository: repository
+            ) {
+                throw repairPersistenceError
+            }
             refreshArchiveState(preferredPersonID: version.personID)
             throw error
         }
+        try repository.clearPendingVersionRepair()
         pendingVersionRepair = nil
         refreshArchiveState(preferredPersonID: version.personID)
     }
@@ -262,9 +271,16 @@ final class PersonTimelineStore: ObservableObject {
         do {
             try repository.clearDraft(for: version.personID)
         } catch {
+            if let repairPersistenceError = rememberPendingVersionRepair(
+                version,
+                repository: repository
+            ) {
+                throw repairPersistenceError
+            }
             refreshArchiveState(preferredPersonID: version.personID)
             throw error
         }
+        try repository.clearPendingVersionRepair()
         pendingVersionRepair = nil
         refreshArchiveState(preferredPersonID: version.personID)
     }
@@ -286,6 +302,7 @@ final class PersonTimelineStore: ObservableObject {
         people = repository.people
         unassignedPhoneNumbers = repository.peopleFile.unassignedPhoneNumbers.sorted()
         access = repository.access
+        pendingVersionRepair = repository.pendingVersionRepair
 
         let selectedID = stablePersonID(preferredPersonID)
             ?? stablePersonID(selectedPersonID)
@@ -306,7 +323,10 @@ final class PersonTimelineStore: ObservableObject {
         calls = repository.calls(for: id).map { entry in
             PersonTimelineCall(
                 entry: entry,
-                resolvedSource: PersonTimelineCall.resolveSource(for: entry)
+                resolvedSource: PersonTimelineCall.resolveSource(
+                    for: entry,
+                    archiveRoot: archiveRoot
+                )
             )
         }
         selectedCallIDs = repository.draftCallIDs(for: id)
@@ -331,5 +351,19 @@ final class PersonTimelineStore: ObservableObject {
         access = .writable
         unassignedPhoneNumbers = []
         pendingVersionRepair = nil
+    }
+
+    private func rememberPendingVersionRepair(
+        _ version: PersonOrganizationVersion,
+        repository: PersonArchiveRepository
+    ) -> Error? {
+        pendingVersionRepair = version
+        do {
+            try repository.recordPendingVersionRepair(version)
+            return nil
+        } catch {
+            errorMessage = error.localizedDescription
+            return error
+        }
     }
 }

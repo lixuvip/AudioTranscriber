@@ -5,7 +5,8 @@ enum PersonOrganizationInputBuilder {
     static func prepare(
         person: PersonRecord,
         selectedCallIDs: Set<String>,
-        calls: [CallRecordIndexEntry]
+        calls: [CallRecordIndexEntry],
+        archiveRoot: URL? = nil
     ) throws -> PersonOrganizationPreparation {
         guard !selectedCallIDs.isEmpty else {
             throw PersonOrganizationInputError.noSelectedCalls
@@ -24,7 +25,7 @@ enum PersonOrganizationInputBuilder {
         var unavailableCallIDs: [String] = []
 
         for call in orderedCalls {
-            if let source = readableSource(for: call) {
+            if let source = readableSource(for: call, archiveRoot: archiveRoot) {
                 readableCalls.append(source)
             } else {
                 unavailableCallIDs.append(call.id)
@@ -63,24 +64,24 @@ enum PersonOrganizationInputBuilder {
     }
 
     private static func readableSource(
-        for call: CallRecordIndexEntry
+        for call: CallRecordIndexEntry,
+        archiveRoot: URL?
     ) -> ReadableCallSource? {
-        let candidates: [(PersonOrganizationSourceKind, String)] = [
-            (.proofread, call.speakerTextPath),
-            (.transcript, call.transcriptPath)
-        ]
-
-        for (kind, path) in candidates {
-            guard let content = readMarkdown(atPath: path) else { continue }
-            return ReadableCallSource(
-                call: call,
-                kind: kind,
-                path: path,
-                content: content.markdown,
-                contentHash: content.hash
-            )
+        let resolvedSource = PersonTimelineCall.resolveSource(
+            for: call,
+            archiveRoot: archiveRoot
+        )
+        guard let kind = resolvedSource.kind,
+              let content = readMarkdown(atPath: resolvedSource.path) else {
+            return nil
         }
-        return nil
+        return ReadableCallSource(
+            call: call,
+            kind: kind,
+            path: resolvedSource.path,
+            content: content.markdown,
+            contentHash: content.hash
+        )
     }
 
     private static func readMarkdown(

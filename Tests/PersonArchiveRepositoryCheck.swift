@@ -18,6 +18,7 @@ struct PersonArchiveRepositoryCheck {
         try checkLoadNormalizesPersistedPhoneNumbers()
         try checkPhoneConflictErrors()
         try checkRevertMergeRejectsRestoredPhoneConflict()
+        try checkMergeMigratesDraftsAndRevertPreservesLaterTargetEdits()
         print("PersonArchiveRepositoryCheck passed")
     }
 
@@ -45,6 +46,11 @@ struct PersonArchiveRepositoryCheck {
             try decoder.decode(OrganizationVersionsFile.self, from: emptyData),
             OrganizationVersionsFile(),
             "organization versions file decodes missing fields with defaults"
+        )
+        assertEqual(
+            try decoder.decode(PendingOrganizationRepairFile.self, from: emptyData),
+            PendingOrganizationRepairFile(),
+            "pending repair file decodes missing fields with defaults"
         )
 
         let createdAt = Date(timeIntervalSince1970: 1_700_000_000.123)
@@ -124,6 +130,10 @@ struct PersonArchiveRepositoryCheck {
         assertCodableRoundTrip(people, "planned people file")
         assertCodableRoundTrip(drafts, "planned selection drafts file")
         assertCodableRoundTrip(versions, "planned organization versions file")
+        assertCodableRoundTrip(
+            PendingOrganizationRepairFile(version: versions.versions[0]),
+            "planned pending repair file"
+        )
     }
 
     private static func checkMissingFileUsesWritableDefault() throws {
@@ -920,6 +930,100 @@ struct PersonArchiveRepositoryCheck {
                 repository.peopleFile.mergeHistory,
                 historyBeforeRevert,
                 "failed revert should preserve merge history"
+            )
+        }
+    }
+
+    private static func checkMergeMigratesDraftsAndRevertPreservesLaterTargetEdits() throws {
+        try withTemporaryDirectory("merge-draft-revert-preserve-edits") { root in
+            let calls = [
+                makeCall(id: "call-target", name: "章文", phone: "15397111188", time: 100),
+                makeCall(id: "call-source", name: "章文", phone: "13102133750", time: 200),
+                makeCall(id: "call-new", name: "新号码", phone: "18600000000", time: 300)
+            ]
+            let repository = PersonArchiveRepository(
+                archiveRoot: root,
+                now: { Date(timeIntervalSince1970: 500) }
+            )
+            try repository.load(indexEntries: calls)
+
+            let target = try require(
+                repository.person(containing: "15397111188"),
+                "target before merge"
+            )
+            let source = try require(
+                repository.person(containing: "13102133750"),
+                "source before merge"
+            )
+            let later = try require(
+                repository.person(containing: "18600000000"),
+                "later phone person before merge"
+            )
+            try repository.setDraftCallIDs(Set(["call-target"]), for: target.id)
+            try repository.setDraftCallIDs(Set(["call-source"]), for: source.id)
+
+            let merged = try repository.mergePeople(
+                personIDs: [target.id, source.id],
+                targetPersonID: target.id,
+                displayName: "章文合并"
+            )
+            assertEqual(merged.id, target.id, "merge keeps target id")
+            assertEqual(
+                repository.draftCallIDs(for: target.id),
+                Set(["call-target", "call-source"]),
+                "merge migrates source draft calls into target"
+            )
+            assertEqual(
+                repository.draftsFile.drafts[source.id],
+                nil,
+                "merge removes source draft key"
+            )
+
+            _ = try repository.renamePerson(target.id, displayName: "章文后续整理")
+            try repository.deletePersonKeepingPhonesUnassigned(later.id)
+            _ = try repository.assignUnassignedPhones(
+                later.phoneNumbers,
+                to: target.id
+            )
+            try repository.setDraftCallIDs(
+                Set(["call-target", "call-source", "call-new"]),
+                for: target.id
+            )
+
+            let merge = try require(
+                repository.peopleFile.mergeHistory.last,
+                "merge history for revert"
+            )
+            try repository.revertMerge(merge.id)
+
+            let revertedTarget = try require(
+                repository.peopleFile.people.first { $0.id == target.id },
+                "target after revert"
+            )
+            assertEqual(
+                revertedTarget.displayName,
+                "章文后续整理",
+                "revert preserves target rename made after merge"
+            )
+            assertEqual(
+                revertedTarget.phoneNumbers.sorted(),
+                ["15397111188", "18600000000"],
+                "revert removes source phones but keeps post-merge target phones"
+            )
+            assertEqual(
+                repository.person(containing: "13102133750")?.id,
+                source.id,
+                "revert restores source person"
+            )
+            assertEqual(
+                repository.draftCallIDs(for: target.id),
+                Set(["call-target", "call-new"]),
+                "revert keeps target-owned draft calls on target"
+            )
+            assertEqual(
+                repository.draftCallIDs(for: source.id),
+                Set(["call-source"]),
+                "revert moves source draft calls back to source"
             )
         }
     }
