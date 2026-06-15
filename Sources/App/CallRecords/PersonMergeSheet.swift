@@ -93,22 +93,22 @@ struct PersonMergeSheet: View {
     }
 
     private var canConfirm: Bool {
-        candidates.count >= 2
-            && candidates.contains { $0.id == targetPersonID }
+        uniqueCandidateIDs.count >= 2
+            && uniqueCandidateIDs.contains(targetPersonID)
             && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var validationMessage: String {
-        if candidates.count < 2 {
+        if uniqueCandidateIDs.count < 2 {
             return "至少选择两个人物"
         }
-        if !candidates.contains(where: { $0.id == targetPersonID }) {
+        if !uniqueCandidateIDs.contains(targetPersonID) {
             return "请选择合并目标"
         }
         if displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "请输入合并后名称"
         }
-        return "\(candidates.count) 个人物将被合并"
+        return "\(uniqueCandidateIDs.count) 个人物将被合并"
     }
 
     private var uniqueCandidateIDs: [String] {

@@ -35,7 +35,10 @@ final class PersonTimelineStore: ObservableObject {
     }
 
     var mergeSuggestions: [[PersonRecord]] {
-        let groups = Dictionary(grouping: people) { person in
+        let namedPeople = people.filter { person in
+            !person.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let groups = Dictionary(grouping: namedPeople) { person in
             person.displayName
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
