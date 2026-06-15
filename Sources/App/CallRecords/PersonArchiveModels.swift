@@ -317,37 +317,76 @@ enum PersonArchiveError: LocalizedError, Equatable {
 }
 
 struct PersonTimelineCall: Identifiable, Equatable {
+    struct SourceResolution: Equatable {
+        var kind: PersonOrganizationSourceKind?
+        var path: String
+        var isAvailable: Bool
+        var unavailableReason: String
+
+        static let missingPaths = SourceResolution(
+            kind: nil,
+            path: "",
+            isAvailable: false,
+            unavailableReason: "来源缺失：没有整理版或通话记录路径"
+        )
+
+        static let unreadableSources = SourceResolution(
+            kind: nil,
+            path: "",
+            isAvailable: false,
+            unavailableReason: "来源缺失：整理版和通话记录文件均不可读取"
+        )
+    }
+
     let entry: CallRecordIndexEntry
+    private let sourceResolution: SourceResolution
+
+    init(
+        entry: CallRecordIndexEntry,
+        resolvedSource: SourceResolution? = nil
+    ) {
+        self.entry = entry
+        sourceResolution = resolvedSource ?? Self.resolveSource(for: entry)
+    }
 
     var id: String {
         entry.id
     }
 
     var preferredSourcePath: String {
-        if let source = preferredSource {
-            return source.path
-        }
-        return ""
+        sourceResolution.path
     }
 
     var preferredSourceKind: PersonOrganizationSourceKind? {
-        preferredSource?.kind
+        sourceResolution.kind
     }
 
     var isAvailable: Bool {
-        preferredSource != nil
+        sourceResolution.isAvailable
     }
 
-    private var preferredSource: (kind: PersonOrganizationSourceKind, path: String)? {
+    var unavailableReason: String {
+        sourceResolution.unavailableReason
+    }
+
+    static func resolveSource(for entry: CallRecordIndexEntry) -> SourceResolution {
         let candidates: [(PersonOrganizationSourceKind, String)] = [
             (.proofread, entry.speakerTextPath),
             (.transcript, entry.transcriptPath)
         ]
 
         for (kind, path) in candidates where Self.isReadableFile(atPath: path) {
-            return (kind, path)
+            return SourceResolution(
+                kind: kind,
+                path: path,
+                isAvailable: true,
+                unavailableReason: ""
+            )
         }
-        return nil
+        let hasAnyPath = candidates.contains {
+            !$0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return hasAnyPath ? .unreadableSources : .missingPaths
     }
 
     private static func isReadableFile(atPath path: String) -> Bool {

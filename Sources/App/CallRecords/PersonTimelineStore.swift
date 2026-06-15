@@ -249,7 +249,12 @@ final class PersonTimelineStore: ObservableObject {
             return
         }
 
-        calls = repository.calls(for: id).map(PersonTimelineCall.init)
+        calls = repository.calls(for: id).map { entry in
+            PersonTimelineCall(
+                entry: entry,
+                resolvedSource: PersonTimelineCall.resolveSource(for: entry)
+            )
+        }
         selectedCallIDs = repository.draftCallIDs(for: id)
         versions = repository.versions(for: id)
     }

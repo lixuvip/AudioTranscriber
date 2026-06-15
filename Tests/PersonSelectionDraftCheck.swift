@@ -13,6 +13,7 @@ struct PersonSelectionDraftCheck {
         try checkDraftCorruptionMakesRepositoryReadOnly()
         try await checkStoreTogglePersistsDraft()
         try await checkStoreCallSummaryCoversEveryPerson()
+        try await checkStoreCachesResolvedSourceStatus()
         try await checkStoreSelectRecent30Days()
         try await checkStorePrepareOrganizationUsesCurrentSelection()
         try await checkStoreCommitRepairAndClearDraft()
@@ -624,6 +625,85 @@ struct PersonSelectionDraftCheck {
             }
             assertEqual(missing.count, 0, "missing person summary has zero calls")
             assertEqual(missing.latestDateText, nil, "missing person summary has no latest date")
+        }
+    }
+
+    private static func checkStoreCachesResolvedSourceStatus() async throws {
+        try await withTemporaryDirectoryAsync("store-cached-source-status") { root in
+            let person = PersonRecord(
+                id: "person-a",
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            )
+            try savePeople([person], to: root)
+
+            let outputDir = root
+                .appendingPathComponent("Calls", isDirectory: true)
+                .appendingPathComponent("call-a", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: outputDir,
+                withIntermediateDirectories: true
+            )
+            let invalidProofreadURL = outputDir.appendingPathComponent("invalid-proofread.md")
+            let transcriptURL = outputDir.appendingPathComponent("call-a_通话记录.md")
+            try Data([0xff, 0xfe, 0xfd]).write(to: invalidProofreadURL)
+            try "transcript fallback".write(
+                to: transcriptURL,
+                atomically: true,
+                encoding: .utf8
+            )
+
+            let entry = makeCall(
+                root: root,
+                id: "call-a",
+                name: "章文",
+                phone: "15397111188",
+                time: 100,
+                transcriptPath: transcriptURL.path,
+                speakerTextPath: invalidProofreadURL.path
+            )
+            try saveIndex([entry], to: root)
+
+            let store = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try store.openArchive(root)
+                store.selectPerson(person.id)
+            }
+
+            guard let cachedCall = await MainActor.run(body: { store.calls.first }) else {
+                fatalError("expected cached timeline call")
+            }
+            assertEqual(
+                cachedCall.preferredSourceKind,
+                .transcript,
+                "store caches transcript fallback source kind"
+            )
+            assertEqual(
+                cachedCall.preferredSourcePath,
+                transcriptURL.path,
+                "store caches transcript fallback path"
+            )
+            assertEqual(cachedCall.isAvailable, true, "cached fallback starts available")
+
+            try Data([0xc3, 0x28]).write(to: transcriptURL)
+            let cachedAfterFileChange = await MainActor.run {
+                store.calls[0]
+            }
+            assertEqual(
+                cachedAfterFileChange.preferredSourceKind,
+                .transcript,
+                "cached source kind does not reread during render"
+            )
+            assertEqual(
+                cachedAfterFileChange.preferredSourcePath,
+                transcriptURL.path,
+                "cached source path does not reread during render"
+            )
+            assertEqual(
+                cachedAfterFileChange.isAvailable,
+                true,
+                "cached availability does not reread during render"
+            )
         }
     }
 
