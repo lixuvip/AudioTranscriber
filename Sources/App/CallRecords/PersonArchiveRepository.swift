@@ -1,6 +1,10 @@
 import Foundation
 
 final class PersonArchiveRepository {
+    private static let peopleRecoveryFailureReason = "已读取备份，但无法恢复 people.json，请重新载入归档"
+    private static let draftsRecoveryFailureReason = "已读取备份，但无法恢复 selection_drafts.json，请重新载入归档"
+    private static let draftSyncFailureReason = "人物归档已保存，但选择草稿未能同步，请重新载入归档"
+
     private(set) var peopleFile = PeopleFile()
     private(set) var draftsFile = SelectionDraftsFile()
     private(set) var indexEntries: [CallRecordIndexEntry] = []
@@ -66,7 +70,7 @@ final class PersonArchiveRepository {
                 try AtomicJSONFileStore.save(peopleFile, to: peopleURL)
                 savedPeopleDuringRecovery = true
             } catch {
-                access = .readOnly(reason: "已读取备份，但无法恢复 people.json：\(error.localizedDescription)")
+                access = .readOnly(reason: Self.peopleRecoveryFailureReason)
                 return
             }
         }
@@ -75,9 +79,7 @@ final class PersonArchiveRepository {
             do {
                 try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
             } catch {
-                access = .readOnly(
-                    reason: "已读取备份，但无法恢复 selection_drafts.json：\(error.localizedDescription)"
-                )
+                access = .readOnly(reason: Self.draftsRecoveryFailureReason)
                 return
             }
         }
@@ -87,10 +89,16 @@ final class PersonArchiveRepository {
             try savePeople()
         }
         try bootstrapMissingPhones()
+        do {
+            try pruneAllDrafts()
+        } catch {
+            access = .readOnly(reason: Self.draftSyncFailureReason)
+        }
     }
 
     func draftCallIDs(for personID: String) -> Set<String> {
         Set(draftsFile.drafts[personID]?.callIDs ?? [])
+            .intersection(availableCallIDs(for: personID))
     }
 
     func setDraftCallIDs(_ callIDs: Set<String>, for personID: String) throws {
@@ -166,8 +174,7 @@ final class PersonArchiveRepository {
         )
         peopleFile.people.append(person)
         removeUnassignedPhones(normalizedPhones)
-        try savePeople()
-        try pruneAllDrafts()
+        try savePeopleThenPruneDrafts()
         return person
     }
 
@@ -201,8 +208,7 @@ final class PersonArchiveRepository {
         peopleFile.people[index].updatedAt = stableNow()
         removeUnassignedPhones(normalizedPhones)
         let person = peopleFile.people[index]
-        try savePeople()
-        try pruneAllDrafts()
+        try savePeopleThenPruneDrafts()
         return person
     }
 
@@ -251,8 +257,7 @@ final class PersonArchiveRepository {
             )
         )
         removeUnassignedPhones(target.phoneNumbers)
-        try savePeople()
-        try pruneAllDrafts()
+        try savePeopleThenPruneDrafts()
         return target
     }
 
@@ -294,14 +299,12 @@ final class PersonArchiveRepository {
             )
             peopleFile.people.append(person)
             removeUnassignedPhones(movedPhones)
-            try savePeople()
-            try pruneAllDrafts()
+            try savePeopleThenPruneDrafts()
             return person
         }
 
         addUnassignedPhones(movedPhones)
-        try savePeople()
-        try pruneAllDrafts()
+        try savePeopleThenPruneDrafts()
         return nil
     }
 
@@ -311,8 +314,7 @@ final class PersonArchiveRepository {
         let phones = peopleFile.people[index].phoneNumbers
         peopleFile.people.remove(at: index)
         addUnassignedPhones(phones)
-        try savePeople()
-        try pruneAllDrafts()
+        try savePeopleThenPruneDrafts()
     }
 
     func revertMerge(_ mergeID: String) throws {
@@ -338,8 +340,7 @@ final class PersonArchiveRepository {
         peopleFile.people.append(contentsOf: merge.beforePeople)
         peopleFile.mergeHistory[mergeIndex].revertedAt = stableNow()
         removeUnassignedPhones(merge.beforePeople.flatMap(\.phoneNumbers))
-        try savePeople()
-        try pruneAllDrafts()
+        try savePeopleThenPruneDrafts()
     }
 
     private func readOnlyReason(
@@ -422,6 +423,16 @@ final class PersonArchiveRepository {
 
     private func saveDrafts() throws {
         try AtomicJSONFileStore.save(draftsFile, to: draftsURL)
+    }
+
+    private func savePeopleThenPruneDrafts() throws {
+        try savePeople()
+        do {
+            try pruneAllDrafts()
+        } catch {
+            access = .readOnly(reason: Self.draftSyncFailureReason)
+            throw PersonArchiveError.readOnly(Self.draftSyncFailureReason)
+        }
     }
 
     private func availableCallIDs(for personID: String) -> Set<String> {
