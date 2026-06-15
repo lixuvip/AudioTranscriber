@@ -407,6 +407,49 @@ struct PersonArchiveRepositoryCheck {
                 true,
                 "timeline remains available when transcript fallback exists"
             )
+            let invalidProofread = outputDir.appendingPathComponent("invalid-proofread.md")
+            try Data([0xff, 0xfe, 0xfd]).write(to: invalidProofread)
+            let invalidProofreadEntry = makeCall(
+                id: "call-b3",
+                name: "章文",
+                phone: "15397111188",
+                time: 260,
+                outputDirectoryPath: outputDir.path,
+                transcriptPath: transcript.path,
+                speakerTextPath: invalidProofread.path
+            )
+            assertEqual(
+                PersonTimelineCall(entry: invalidProofreadEntry).preferredSourcePath,
+                transcript.path,
+                "timeline falls back to transcript when proofread is invalid UTF-8"
+            )
+            assertEqual(
+                PersonTimelineCall(entry: invalidProofreadEntry).isAvailable,
+                true,
+                "timeline remains available when transcript fallback is decodable"
+            )
+
+            let invalidTranscript = outputDir.appendingPathComponent("invalid-transcript.md")
+            try Data([0xc3, 0x28]).write(to: invalidTranscript)
+            let invalidBothEntry = makeCall(
+                id: "call-b4",
+                name: "章文",
+                phone: "15397111188",
+                time: 270,
+                outputDirectoryPath: outputDir.path,
+                transcriptPath: invalidTranscript.path,
+                speakerTextPath: invalidProofread.path
+            )
+            assertEqual(
+                PersonTimelineCall(entry: invalidBothEntry).preferredSourcePath,
+                "",
+                "timeline has no preferred source when both files are invalid UTF-8"
+            )
+            assertEqual(
+                PersonTimelineCall(entry: invalidBothEntry).isAvailable,
+                false,
+                "timeline is unavailable when no source is UTF-8 decodable"
+            )
             let missing = makeCall(
                 id: "call-c",
                 name: "章文",

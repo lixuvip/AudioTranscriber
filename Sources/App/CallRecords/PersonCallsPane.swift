@@ -242,7 +242,7 @@ private extension PersonTimelineCall {
             }
         }
 
-        if preferredSourcePath.isEmpty {
+        if entry.speakerTextPath.isEmpty && entry.transcriptPath.isEmpty {
             return SourceStatus(
                 title: "缺失",
                 isAvailable: false,

@@ -327,7 +327,7 @@ struct PersonTimelineCall: Identifiable, Equatable {
         if let source = preferredSource {
             return source.path
         }
-        return entry.speakerTextPath.isEmpty ? entry.transcriptPath : entry.speakerTextPath
+        return ""
     }
 
     var preferredSourceKind: PersonOrganizationSourceKind? {
@@ -352,9 +352,14 @@ struct PersonTimelineCall: Identifiable, Equatable {
 
     private static func isReadableFile(atPath path: String) -> Bool {
         guard !path.isEmpty else { return false }
-        var isDirectory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
-            && !isDirectory.boolValue
+        let url = URL(fileURLWithPath: path)
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+              values.isRegularFile == true,
+              let data = try? Data(contentsOf: url),
+              String(data: data, encoding: .utf8) != nil else {
+            return false
+        }
+        return true
     }
 }
 
