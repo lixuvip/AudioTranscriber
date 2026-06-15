@@ -11,6 +11,9 @@ struct PersonArchiveRepositoryCheck {
         try checkSavingAfterRecoveryPreservesValidBackup()
         try checkReadOnlyWhenPrimaryAndBackupAreCorrupt()
         try checkLossyRoundTripThrowsMismatch()
+        try checkIndexHelpersAndTimelineAvailability()
+        try checkPeopleBootstrapMergeSplitReassignAndRename()
+        try checkPhoneConflictErrors()
         print("PersonArchiveRepositoryCheck passed")
     }
 
@@ -70,6 +73,8 @@ struct PersonArchiveRepositoryCheck {
             ],
             unassignedPhoneNumbers: ["10010"]
         )
+        assertIdentifiable(person, "person record identifiable")
+        assertIdentifiable(people.mergeHistory[0], "merge record identifiable")
         let drafts = SelectionDraftsFile(
             drafts: [
                 person.id: PersonSelectionDraft(
@@ -110,6 +115,7 @@ struct PersonArchiveRepositoryCheck {
                 )
             ]
         )
+        assertIdentifiable(versions.versions[0], "organization version identifiable")
 
         assertCodableRoundTrip(people, "planned people file")
         assertCodableRoundTrip(drafts, "planned selection drafts file")
@@ -320,6 +326,277 @@ struct PersonArchiveRepositoryCheck {
         }
     }
 
+    private static func checkIndexHelpersAndTimelineAvailability() throws {
+        try withTemporaryDirectory("index-helpers") { root in
+            let archiveRoot = root.appendingPathComponent("Archive", isDirectory: true)
+            let outputDir = archiveRoot
+                .appendingPathComponent("Calls/2024/2024-08/call-a", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: outputDir,
+                withIntermediateDirectories: true
+            )
+            let transcript = outputDir.appendingPathComponent("call-a_通话记录.md")
+            let speakerText = outputDir.appendingPathComponent("call-a_整理版.md")
+            try "transcript".write(to: transcript, atomically: true, encoding: .utf8)
+            try "speaker".write(to: speakerText, atomically: true, encoding: .utf8)
+
+            let entry = makeCall(
+                id: "call-a",
+                name: "章文",
+                phone: "15397111188",
+                time: 100,
+                outputDirectoryPath: outputDir.path,
+                transcriptPath: transcript.path,
+                speakerTextPath: speakerText.path
+            )
+            try writeIndex([entry], to: archiveRoot)
+
+            assertEqual(
+                try CallRecordArchiveWriter.loadIndex(from: archiveRoot),
+                [entry],
+                "load index helper decodes entries"
+            )
+            assertEqual(
+                CallRecordArchiveWriter.archiveRoot(forIndexEntry: entry).path,
+                archiveRoot.path,
+                "archive root helper walks up from entry output directory"
+            )
+
+            let timelineCall = PersonTimelineCall(entry: entry)
+            assertEqual(
+                timelineCall.preferredSourcePath,
+                speakerText.path,
+                "timeline prefers speaker text path"
+            )
+            assertEqual(timelineCall.isAvailable, true, "timeline source exists")
+
+            let transcriptOnly = makeCall(
+                id: "call-b",
+                name: "章文",
+                phone: "15397111188",
+                time: 200,
+                outputDirectoryPath: outputDir.path,
+                transcriptPath: transcript.path,
+                speakerTextPath: ""
+            )
+            assertEqual(
+                PersonTimelineCall(entry: transcriptOnly).preferredSourcePath,
+                transcript.path,
+                "timeline falls back to transcript path"
+            )
+            let missing = makeCall(
+                id: "call-c",
+                name: "章文",
+                phone: "15397111188",
+                time: 300,
+                outputDirectoryPath: outputDir.path,
+                transcriptPath: outputDir.appendingPathComponent("missing.md").path,
+                speakerTextPath: ""
+            )
+            assertEqual(
+                PersonTimelineCall(entry: missing).isAvailable,
+                false,
+                "timeline requires an existing source file"
+            )
+        }
+    }
+
+    private static func checkPeopleBootstrapMergeSplitReassignAndRename() throws {
+        try withTemporaryDirectory("people-mapping") { root in
+            let calls = [
+                makeCall(id: "call-a", name: "章文", phone: "15397111188", time: 100),
+                makeCall(id: "call-b", name: "章文", phone: "13102133750", time: 200),
+                makeCall(id: "call-c", name: "章文", phone: "15397111188", time: 300)
+            ]
+            let repository = PersonArchiveRepository(
+                archiveRoot: root,
+                now: { Date(timeIntervalSince1970: 500) }
+            )
+            try repository.load(indexEntries: calls)
+
+            assertEqual(repository.people.count, 2, "same name different phone does not auto merge")
+            let first = try require(
+                repository.person(containing: "15397111188"),
+                "first phone person"
+            )
+            assertEqual(
+                repository.calls(for: first.id).map(\.id),
+                ["call-c", "call-a"],
+                "calls for first person are descending"
+            )
+            let second = try require(
+                repository.person(containing: "13102133750"),
+                "second phone person"
+            )
+
+            let merged = try repository.mergePeople(
+                personIDs: [first.id, second.id],
+                targetPersonID: first.id,
+                displayName: " 章文 "
+            )
+            assertEqual(
+                merged.phoneNumbers.sorted(),
+                ["13102133750", "15397111188"],
+                "merged phone numbers"
+            )
+            assertEqual(repository.people.count, 1, "merged people count")
+            let merge = try require(
+                repository.peopleFile.mergeHistory.last,
+                "merge history"
+            )
+            assertEqual(
+                merge.beforePeople.sorted { $0.id < $1.id },
+                [first, second].sorted { $0.id < $1.id },
+                "merge history stores complete before people"
+            )
+
+            try repository.revertMerge(merge.id)
+            assertEqual(repository.people.count, 2, "revert restores both people")
+            assertEqual(
+                repository.peopleFile.mergeHistory.last?.revertedAt != nil,
+                true,
+                "revert marks merge history"
+            )
+
+            let restoredFirst = try require(
+                repository.person(containing: "15397111188"),
+                "restored first phone person"
+            )
+            let detached = try repository.splitPhones(
+                from: restoredFirst.id,
+                phones: ["15397111188"],
+                newDisplayName: nil
+            )
+            assertEqual(detached, nil, "split can leave phone unassigned")
+            assertEqual(
+                repository.peopleFile.unassignedPhoneNumbers,
+                ["15397111188"],
+                "split phone becomes unassigned"
+            )
+
+            try repository.load(indexEntries: calls)
+            assertEqual(
+                repository.person(containing: "15397111188"),
+                nil,
+                "load does not auto bootstrap explicitly unassigned phone"
+            )
+            assertEqual(
+                repository.peopleFile.unassignedPhoneNumbers,
+                ["15397111188"],
+                "explicitly unassigned phone persists after reload"
+            )
+
+            let reassigned = try repository.createPerson(
+                displayName: "章文新档案",
+                phones: ["15397111188"]
+            )
+            assertEqual(
+                repository.peopleFile.unassignedPhoneNumbers,
+                [],
+                "create person removes unassigned marker"
+            )
+            let renamed = try repository.renamePerson(reassigned.id, displayName: " 章文 ")
+            assertEqual(renamed.displayName, "章文", "rename trims display name")
+        }
+    }
+
+    private static func checkPhoneConflictErrors() throws {
+        try withTemporaryDirectory("phone-conflicts") { root in
+            let calls = [
+                makeCall(id: "call-a", name: "章文", phone: "15397111188", time: 100),
+                makeCall(id: "call-b", name: "章文", phone: "13102133750", time: 200),
+                makeCall(id: "call-c", name: "王强", phone: "18600000000", time: 300)
+            ]
+            let repository = PersonArchiveRepository(
+                archiveRoot: root,
+                now: { Date(timeIntervalSince1970: 500) }
+            )
+            try repository.load(indexEntries: calls)
+
+            let first = try require(
+                repository.person(containing: "15397111188"),
+                "first phone person"
+            )
+            let second = try require(
+                repository.person(containing: "13102133750"),
+                "second phone person"
+            )
+            let third = try require(
+                repository.person(containing: "18600000000"),
+                "third phone person"
+            )
+
+            assertThrowsPhoneConflict(phone: "18600000000", ownerID: third.id) {
+                _ = try repository.createPerson(
+                    displayName: "冲突新人物",
+                    phones: ["18600000000"]
+                )
+            }
+            assertThrowsPhoneConflict(phone: "15397111188", ownerID: first.id) {
+                _ = try repository.assignUnassignedPhones(
+                    ["15397111188"],
+                    to: second.id
+                )
+            }
+
+            try repository.deletePersonKeepingPhonesUnassigned(third.id)
+            assertEqual(
+                repository.peopleFile.unassignedPhoneNumbers.contains("18600000000"),
+                true,
+                "deleted person phone becomes unassigned"
+            )
+            let adopted = try repository.assignUnassignedPhones(
+                ["18600000000"],
+                to: second.id
+            )
+            assertEqual(
+                adopted.phoneNumbers.sorted(),
+                ["13102133750", "18600000000"],
+                "assign can adopt unassigned phone"
+            )
+
+        }
+
+        try withTemporaryDirectory("merge-phone-conflict") { root in
+            let conflictPhone = "13102133750"
+            try AtomicJSONFileStore.save(
+                PeopleFile(
+                    people: [
+                        PersonRecord(
+                            id: "person-a",
+                            displayName: "章文 A",
+                            phoneNumbers: ["15397111188"]
+                        ),
+                        PersonRecord(
+                            id: "person-b",
+                            displayName: "章文 B",
+                            phoneNumbers: [conflictPhone]
+                        ),
+                        PersonRecord(
+                            id: "person-c",
+                            displayName: "第三方",
+                            phoneNumbers: [conflictPhone]
+                        )
+                    ]
+                ),
+                to: root.appendingPathComponent("people.json")
+            )
+            let repository = PersonArchiveRepository(
+                archiveRoot: root,
+                now: { Date(timeIntervalSince1970: 500) }
+            )
+            try repository.load(indexEntries: [])
+
+            assertThrowsPhoneConflict(phone: conflictPhone, ownerID: "person-c") {
+                _ = try repository.mergePeople(
+                    personIDs: ["person-a", "person-b"],
+                    targetPersonID: "person-a",
+                    displayName: "章文"
+                )
+            }
+        }
+    }
+
     private static func assertCodableRoundTrip<T: Codable & Equatable>(
         _ value: T,
         _ message: String
@@ -358,6 +635,71 @@ struct PersonArchiveRepositoryCheck {
         try body(root)
     }
 
+    private static func makeCall(
+        id: String,
+        name: String,
+        phone: String,
+        time: TimeInterval,
+        outputDirectoryPath: String = "",
+        transcriptPath: String = "",
+        speakerTextPath: String = ""
+    ) -> CallRecordIndexEntry {
+        CallRecordIndexEntry(
+            id: id,
+            displayName: name,
+            contactName: name,
+            rawPhone: phone,
+            normalizedPhone: phone.filter(\.isNumber),
+            callDate: Date(timeIntervalSince1970: time),
+            callDateText: "time\(Int(time))",
+            durationSeconds: nil,
+            outputDirectoryPath: outputDirectoryPath,
+            transcriptPath: transcriptPath,
+            speakerTextPath: speakerTextPath,
+            summaryPath: "",
+            engine: "test-engine",
+            modelID: "test-model"
+        )
+    }
+
+    private static func writeIndex(
+        _ entries: [CallRecordIndexEntry],
+        to archiveRoot: URL
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: archiveRoot,
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(entries)
+        try data.write(to: archiveRoot.appendingPathComponent("call_index.json"))
+    }
+
+    private static func require<T>(_ value: T?, _ message: String) throws -> T {
+        guard let value else {
+            throw CheckError(message)
+        }
+        return value
+    }
+
+    private static func assertThrowsPhoneConflict(
+        phone: String,
+        ownerID: String,
+        operation: () throws -> Void
+    ) {
+        do {
+            try operation()
+            fatalError("expected phone conflict for \(phone)")
+        } catch PersonArchiveError.phoneConflict(let conflictPhone, let conflictOwnerID) {
+            assertEqual(conflictPhone, phone, "phone conflict phone")
+            assertEqual(conflictOwnerID, ownerID, "phone conflict owner")
+        } catch {
+            fatalError("expected phoneConflict, got \(error)")
+        }
+    }
+
     private static func assertEqual<T: Equatable>(
         _ lhs: T,
         _ rhs: T,
@@ -366,6 +708,13 @@ struct PersonArchiveRepositoryCheck {
         if lhs != rhs {
             fatalError("\(message): expected \(rhs), got \(lhs)")
         }
+    }
+
+    private static func assertIdentifiable<T: Identifiable>(
+        _ value: T,
+        _ message: String
+    ) where T.ID == String {
+        assertEqual(value.id.isEmpty, false, message)
     }
 
     private struct LossyRoundTripFixture: Codable, Equatable {
@@ -387,6 +736,13 @@ struct PersonArchiveRepositoryCheck {
 
         private enum CodingKeys: String, CodingKey {
             case value
+        }
+    }
+
+    private struct CheckError: Error, CustomStringConvertible {
+        let description: String
+        init(_ description: String) {
+            self.description = description
         }
     }
 }

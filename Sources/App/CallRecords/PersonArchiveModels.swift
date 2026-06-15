@@ -40,7 +40,7 @@ struct PeopleFile: Codable, Equatable {
     }
 }
 
-struct PersonRecord: Codable, Equatable {
+struct PersonRecord: Codable, Equatable, Identifiable {
     var id: String
     var displayName: String
     var phoneNumbers: [String]
@@ -62,7 +62,7 @@ struct PersonRecord: Codable, Equatable {
     }
 }
 
-struct PersonMergeRecord: Codable, Equatable {
+struct PersonMergeRecord: Codable, Equatable, Identifiable {
     var id: String
     var targetPersonID: String
     var beforePeople: [PersonRecord]
@@ -181,7 +181,7 @@ struct PersonSnapshot: Codable, Equatable {
     }
 }
 
-struct PersonOrganizationVersion: Codable, Equatable {
+struct PersonOrganizationVersion: Codable, Equatable, Identifiable {
     var id: String
     var personID: String
     var personSnapshot: PersonSnapshot
@@ -270,6 +270,46 @@ struct JSONLoadResult<Value> {
 }
 
 extension JSONLoadResult: Equatable where Value: Equatable {}
+
+enum PersonArchiveError: LocalizedError, Equatable {
+    case readOnly(String)
+    case personNotFound(String)
+    case phoneConflict(phone: String, ownerID: String)
+    case invalidMerge
+    case mergeNotFound(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .readOnly(let reason):
+            return reason
+        case .personNotFound(let id):
+            return "人物不存在：\(id)"
+        case .phoneConflict(let phone, _):
+            return "号码 \(phone) 已属于其他人物"
+        case .invalidMerge:
+            return "至少选择两个不同人物进行合并"
+        case .mergeNotFound(let id):
+            return "找不到可撤销的合并记录：\(id)"
+        }
+    }
+}
+
+struct PersonTimelineCall: Identifiable, Equatable {
+    let entry: CallRecordIndexEntry
+
+    var id: String {
+        entry.id
+    }
+
+    var preferredSourcePath: String {
+        entry.speakerTextPath.isEmpty ? entry.transcriptPath : entry.speakerTextPath
+    }
+
+    var isAvailable: Bool {
+        !preferredSourcePath.isEmpty
+            && FileManager.default.fileExists(atPath: preferredSourcePath)
+    }
+}
 
 private func personArchiveTimestamp() -> Date {
     let milliseconds = floor(Date().timeIntervalSince1970 * 1_000) / 1_000
