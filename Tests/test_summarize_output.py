@@ -168,6 +168,28 @@ class SummarizeOutputTests(unittest.TestCase):
         temp_files = list(output_path.parent.glob(f"{output_path.name}.*.tmp"))
         self.assertEqual(temp_files, [])
 
+    def test_unwritable_output_directory_fails_before_provider_call(self):
+        output_dir = self.root / "unwritable"
+        output_dir.mkdir()
+        output_path = output_dir / "summary.md"
+
+        try:
+            output_dir.chmod(0o500)
+            result = self.run_script(
+                self.input_path,
+                "--output-path",
+                output_path,
+            )
+        finally:
+            output_dir.chmod(0o700)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("摘要保存失败", result.stdout + result.stderr)
+        self.assertFalse(self.record_path.exists())
+        self.assertFalse(output_path.exists())
+        temp_files = list(output_dir.glob(f"{output_path.name}.*.tmp"))
+        self.assertEqual(temp_files, [])
+
     def test_empty_summary_keeps_readable_error_message(self):
         output_path = self.root / "empty.md"
 

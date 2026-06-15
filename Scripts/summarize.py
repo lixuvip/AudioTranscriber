@@ -7,6 +7,7 @@ import os
 import sys
 import argparse
 import json
+import tempfile
 import urllib.request
 import urllib.error
 
@@ -57,16 +58,35 @@ if not api_key:
     sys.exit(1)
 
 out_dir = os.path.dirname(out_path) or "."
+probe_path = ""
 try:
     os.makedirs(out_dir, exist_ok=True)
     if os.path.isdir(out_path):
         raise ScriptError("输出路径是目录，不能写入摘要文件")
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=out_dir,
+        prefix=".voicescribe-summary-probe-",
+        suffix=".tmp",
+        delete=False,
+    ) as probe_file:
+        probe_path = probe_file.name
+        probe_file.write("ok\n")
+    os.remove(probe_path)
+    probe_path = ""
 except ScriptError as e:
     print(f"[VoiceScribe] 摘要保存失败: {e}")
     sys.exit(1)
-except Exception as e:
-    print(f"[VoiceScribe] 摘要保存失败: {type(e).__name__}")
+except Exception:
+    print("[VoiceScribe] 摘要保存失败: 输出目录不可写或无法创建输出文件")
     sys.exit(1)
+finally:
+    if probe_path and os.path.exists(probe_path):
+        try:
+            os.remove(probe_path)
+        except OSError:
+            pass
 
 prompt = f"""请阅读以下通话记录，生成一份简明摘要，包含：
 1. 通话主题
