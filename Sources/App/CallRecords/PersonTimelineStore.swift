@@ -191,8 +191,8 @@ final class PersonTimelineStore: ObservableObject {
         }
 
         try repository.appendOrganizationVersion(version)
-        pendingVersionRepair = nil
         try repository.clearDraft(for: version.personID)
+        pendingVersionRepair = nil
         refreshArchiveState(preferredPersonID: version.personID)
     }
 

@@ -15,6 +15,7 @@ struct PersonSelectionDraftCheck {
         try await checkStoreSelectRecent30Days()
         try await checkStorePrepareOrganizationUsesCurrentSelection()
         try await checkStoreCommitRepairAndClearDraft()
+        try await checkStoreRepairPreservesPendingWhenDraftClearFails()
         print("PersonSelectionDraftCheck passed")
     }
 
@@ -742,6 +743,84 @@ struct PersonSelectionDraftCheck {
                 await MainActor.run { store.versions.map(\.id) },
                 ["version-repair", "version-committed"],
                 "store repair appends version after fixing result"
+            )
+        }
+    }
+
+    private static func checkStoreRepairPreservesPendingWhenDraftClearFails() async throws {
+        try await withTemporaryDirectoryAsync("store-repair-clear-draft-failure") { root in
+            let person = PersonRecord(
+                id: "person-a",
+                displayName: "章文",
+                phoneNumbers: ["15397111188"]
+            )
+            try savePeople([person], to: root)
+            let call = try makeAvailableCall(
+                root: root,
+                id: "call-a",
+                name: "章文",
+                phone: "15397111188",
+                time: 100
+            )
+            try saveIndex([call], to: root)
+
+            let repairResult = root.appendingPathComponent("repair-clear-failure.md")
+            let repairVersion = makeVersion(
+                id: "version-repair-clear-failure",
+                personID: person.id,
+                createdAt: Date(timeIntervalSince1970: 300),
+                resultPath: repairResult.path
+            )
+            let store = await MainActor.run { PersonTimelineStore() }
+            try await MainActor.run {
+                try store.openArchive(root)
+                store.selectPerson(person.id)
+                try store.toggleCall("call-a")
+            }
+            do {
+                try await MainActor.run {
+                    try store.commitOrganizationVersion(repairVersion)
+                }
+                fatalError("missing result should leave a pending repair")
+            } catch let error as CocoaError {
+                assertEqual(
+                    error.code,
+                    CocoaError.Code.fileNoSuchFile,
+                    "store failed append surfaces missing result"
+                )
+            } catch {
+                fatalError("expected missing result CocoaError, got \(error)")
+            }
+            assertEqual(
+                await MainActor.run { store.pendingVersionRepair?.id },
+                Optional(repairVersion.id),
+                "store keeps pending repair after append failure"
+            )
+
+            try "repaired".write(to: repairResult, atomically: true, encoding: .utf8)
+            let draftsURL = root.appendingPathComponent("selection_drafts.json")
+            try FileManager.default.setAttributes(
+                [.immutable: true],
+                ofItemAtPath: draftsURL.path
+            )
+            var didThrow = false
+            do {
+                try await MainActor.run {
+                    try store.repairVersionIndex()
+                }
+            } catch {
+                didThrow = true
+            }
+            try FileManager.default.setAttributes(
+                [.immutable: false],
+                ofItemAtPath: draftsURL.path
+            )
+
+            assertEqual(didThrow, true, "repair should surface draft clear failure")
+            assertEqual(
+                await MainActor.run { store.pendingVersionRepair?.id },
+                Optional(repairVersion.id),
+                "store keeps pending repair when draft clear fails"
             )
         }
     }
