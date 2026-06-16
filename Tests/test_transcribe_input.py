@@ -178,6 +178,72 @@ class TranscribeInputValidationTests(unittest.TestCase):
         self.assertIn("pyannote 仍在运行", result.stdout)
         self.assertIn("pyannote pipeline 完成", result.stdout)
 
+    def test_whisper_mlx_transcribe_uses_mlx_whisper_api_and_writes_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio_path = tmp_path / "sample.wav"
+            self._write_silent_wav(audio_path)
+
+            fake_root = tmp_path / "fake_modules"
+            fake_root.mkdir()
+            (fake_root / "mlx_whisper.py").write_text(
+                textwrap.dedent(
+                    """
+                    import json
+                    import sys
+                    from pathlib import Path
+
+                    def transcribe(audio, **kwargs):
+                        Path(audio).with_suffix(".call.json").write_text(
+                            json.dumps(kwargs, ensure_ascii=False),
+                            encoding="utf-8",
+                        )
+                        return {
+                            "text": "第一句话。第二句话。",
+                            "language": kwargs.get("language", "zh"),
+                            "segments": [
+                                {"start": 0.0, "end": 0.2, "text": "第一句话。"},
+                                {"start": 0.2, "end": 0.4, "text": "第二句话。"},
+                            ],
+                        }
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["PYTHONPATH"] = f"{fake_root}{os.pathsep}{env.get('PYTHONPATH', '')}"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "Scripts/transcribe.py",
+                    str(audio_path),
+                    tmp,
+                    "--engine",
+                    "whisperMLX",
+                    "--model-id",
+                    "mlx-community/whisper-large-v3-turbo",
+                    "--language",
+                    "zh",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            call_payload = json.loads((tmp_path / "sample.call.json").read_text(encoding="utf-8"))
+            transcript_md = (tmp_path / "sample_通话记录.md").read_text(encoding="utf-8")
+            raw_json = json.loads((tmp_path / "sample_funasr.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(call_payload["path_or_hf_repo"], "mlx-community/whisper-large-v3-turbo")
+        self.assertEqual(call_payload["language"], "zh")
+        self.assertEqual(call_payload["task"], "transcribe")
+        self.assertIn("[00:00] 【角色A】 第一句话。", transcript_md)
+        self.assertEqual(raw_json["engine"], "whisperMLX")
+        self.assertEqual(raw_json["segments"][1]["text"], "第二句话。")
+
 
 if __name__ == "__main__":
     unittest.main()

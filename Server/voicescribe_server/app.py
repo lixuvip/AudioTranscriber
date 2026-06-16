@@ -30,6 +30,8 @@ def _probe_available_engines() -> list[str]:
         engines.append("funASR")
     if importlib.util.find_spec("mlx_audio") is not None:
         engines.append("vibeVoiceMLX")
+    if importlib.util.find_spec("mlx_whisper") is not None:
+        engines.append("whisperMLX")
     if importlib.util.find_spec("mlx_qwen3_asr") is not None:
         engines.append("qwen3ASR")
     return engines

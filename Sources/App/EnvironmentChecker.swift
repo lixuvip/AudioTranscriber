@@ -83,6 +83,9 @@ class EnvironmentChecker: ObservableObject {
     @Published var recommendedPerformanceTier: PerformanceTier = .medium
     @Published var selectedPerformanceTier: PerformanceTier = .medium
     @Published var recommendationDetail: String = "尚未预热"
+    @Published var silentInstallProgress: Double = 0.0
+    @Published var silentInstallStatus: String = ""
+    @Published var isSilentInstalling = false
     var customPythonPath: String = ""
     var savedPerformanceTier: PerformanceTier?
 
@@ -180,6 +183,166 @@ class EnvironmentChecker: ObservableObject {
         }
     }
 
+    var isMissingPythonDeps: Bool {
+        let pythonDependencyNames: [String]
+        switch runtimeSelection.engine {
+        case .funASR:
+            pythonDependencyNames = ["python3", "funasr"]
+        case .vibeVoiceMLX:
+            pythonDependencyNames = ["python3", "mlx-audio"]
+        case .whisperMLX:
+            pythonDependencyNames = ["python3", "mlx-whisper"]
+        case .qwen3ASR:
+            pythonDependencyNames = ["python3", "mlx-qwen3-asr"]
+        case .qwen3ASRVoiceprint:
+            pythonDependencyNames = ["python3", "mlx-qwen3-asr", "voiceprint-model"]
+        }
+        return deps.contains { pythonDependencyNames.contains($0.name) && !$0.isReady }
+    }
+
+    var isMissingModels: Bool {
+        let modelDependencyNames: [String]
+        switch runtimeSelection.engine {
+        case .funASR:
+            modelDependencyNames = ["models"]
+        case .vibeVoiceMLX, .whisperMLX:
+            modelDependencyNames = ["mlx-model"]
+        case .qwen3ASR, .qwen3ASRVoiceprint:
+            modelDependencyNames = ["qwen3-model"]
+        }
+        return deps.contains { modelDependencyNames.contains($0.name) && !$0.isReady }
+    }
+
+    func startSilentDependencyInstall() {
+        guard !isSilentInstalling else { return }
+
+        let python = pythonPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let managedPython = Self.appManagedPythonPath()
+        let managedVenvRoot = URL(fileURLWithPath: managedPython).deletingLastPathComponent().deletingLastPathComponent().path
+
+        let targetPython = FileManager.default.fileExists(atPath: managedPython) ? managedPython : (FileManager.default.isExecutableFile(atPath: python) ? python : managedPython)
+
+        isSilentInstalling = true
+        silentInstallProgress = 0.0
+        silentInstallStatus = "正在准备本地加速环境..."
+
+        let engine = runtimeSelection.engine
+        let modelID = runtimeSelection.modelID
+        let hasPythonDeps = !isMissingPythonDeps
+        let hasModels = !isMissingModels
+
+        Task.detached(priority: .background) {
+            // 步骤1：检查并创建虚拟环境
+            if !FileManager.default.fileExists(atPath: targetPython) && targetPython == managedPython {
+                await MainActor.run {
+                    self.silentInstallStatus = "正在创建 Python 虚拟环境..."
+                    self.silentInstallProgress = 0.1
+                }
+                let sysPython = "/usr/bin/python3"
+                let createScript = "\"\(sysPython)\" -m venv \"\(managedVenvRoot)\""
+                _ = await Self.streamShell(script: createScript, updateLog: { _ in })
+            }
+
+            // 步骤2：安装 Python 加速库依赖
+            if !hasPythonDeps {
+                await MainActor.run {
+                    self.silentInstallStatus = "正在安装加速库依赖..."
+                    self.silentInstallProgress = 0.2
+                }
+
+                let pkgs: String
+                switch engine {
+                case .funASR:       pkgs = "funasr modelscope openai"
+                case .vibeVoiceMLX: pkgs = "mlx-audio huggingface_hub openai"
+                case .whisperMLX:   pkgs = "mlx-whisper huggingface_hub openai"
+                case .qwen3ASR:     pkgs = "\"mlx-qwen3-asr[diarize]\" huggingface_hub openai"
+                case .qwen3ASRVoiceprint:
+                    pkgs = "\"mlx-qwen3-asr[diarize]\" huggingface_hub openai speechbrain torch torchaudio"
+                }
+
+                let installScript = """
+                "\(targetPython)" -m pip install -U pip setuptools wheel -q && \
+                "\(targetPython)" -m pip install -U \(pkgs)
+                """
+
+                var count = 0
+                _ = await Self.streamShell(script: installScript, updateLog: { line in
+                    count += 1
+                    let p = min(0.2 + Double(count) * 0.01, 0.6)
+                    let status: String
+                    if line.contains("Downloading") {
+                        status = "正在下载加速组件..."
+                    } else if line.contains("Installing") {
+                        status = "正在安装加速组件..."
+                    } else {
+                        status = "正在准备本地加速库..."
+                    }
+                    await MainActor.run {
+                        self.silentInstallProgress = p
+                        self.silentInstallStatus = status
+                    }
+                })
+            }
+
+            // 步骤3：下载模型组件
+            if !hasModels {
+                await MainActor.run {
+                    self.silentInstallStatus = "正在下载 AI 神经网络模型..."
+                    self.silentInstallProgress = 0.65
+                }
+
+                let script: String
+                switch engine {
+                case .funASR:
+                    script = "\"\(targetPython)\" -c \"from funasr import AutoModel; AutoModel(model='paraformer-zh', vad_model='fsmn-vad', punc_model='ct-punc', spk_model='cam++', device='cpu', disable_update=True)\""
+                case .vibeVoiceMLX, .whisperMLX, .qwen3ASR:
+                    let repo = modelID.replacingOccurrences(of: "\"", with: "")
+                    script = "\"\(targetPython)\" -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='\(repo)')\""
+                case .qwen3ASRVoiceprint:
+                    let repo = modelID.replacingOccurrences(of: "\"", with: "")
+                    script = "\"\(targetPython)\" -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='\(repo)'); snapshot_download(repo_id='speechbrain/spkrec-ecapa-voxceleb')\""
+                }
+
+                var count = 0
+                _ = await Self.streamShell(script: script, updateLog: { line in
+                    count += 1
+                    let p = min(0.65 + Double(count) * 0.02, 0.95)
+                    await MainActor.run {
+                        self.silentInstallProgress = p
+                        self.silentInstallStatus = "正在下载模型组件 (\(Int(p * 100))%)..."
+                    }
+                })
+            }
+
+            // 步骤4：最终验证
+            await MainActor.run {
+                self.silentInstallStatus = "正在进行最终验证..."
+                self.silentInstallProgress = 0.96
+            }
+
+            let result = Self.performEnvironmentCheck(
+                customPythonPath: python,
+                runtimeSelection: RuntimeSelection(environment: .macAppleSilicon, engine: engine, modelID: modelID)
+            )
+
+            await MainActor.run {
+                self.pythonPath = result.pythonPath
+                self.pythonSitePackages = result.pythonSitePackages
+                self.deps = result.deps
+                self.performanceProfile = result.performanceProfile
+                self.recommendedPerformanceTier = result.recommendedPerformanceTier
+                self.selectedPerformanceTier = result.recommendedPerformanceTier
+                self.recommendationDetail = result.recommendationDetail
+                self.checkProgress = result.progressMessage
+                self.hasChecked = true
+
+                self.silentInstallProgress = 1.0
+                self.silentInstallStatus = "本地加速就绪"
+                self.isSilentInstalling = false
+            }
+        }
+    }
+
     func applyPerformanceTier(_ tier: PerformanceTier) {
         selectedPerformanceTier = tier
         let detected = Self.detectPerformanceProfile(pythonPath: pythonPath, engine: runtimeSelection.engine)
@@ -211,6 +374,9 @@ class EnvironmentChecker: ObservableObject {
         case .vibeVoiceMLX:
             deps.append(checkMLXAudioStatus(pythonPath))
             deps.append(checkMLXModelStatus(pythonPath, modelID: runtimeSelection.modelID))
+        case .whisperMLX:
+            deps.append(checkWhisperMLXStatus(pythonPath))
+            deps.append(checkWhisperMLXModelStatus(pythonPath, modelID: runtimeSelection.modelID))
         case .qwen3ASR:
             deps.append(checkMLXQwen3ASRStatus(pythonPath))
             deps.append(checkQwen3ASRModelsStatus(pythonPath, modelID: runtimeSelection.modelID))
@@ -270,6 +436,8 @@ class EnvironmentChecker: ObservableObject {
                 isUsable = pythonCanImportFunASR(p)
             case .vibeVoiceMLX:
                 isUsable = pythonCanImportMLXAudio(p)
+            case .whisperMLX:
+                isUsable = pythonCanImportMLXWhisper(p)
             case .qwen3ASR, .qwen3ASRVoiceprint:
                 isUsable = pythonCanImportMLXQwen3ASR(p)
             }
@@ -337,6 +505,14 @@ class EnvironmentChecker: ObservableObject {
             code: "import sys, importlib.util; print('MLXOK' if sys.version_info >= (3, 10) and importlib.util.find_spec('mlx_audio') else '')",
             cleanPythonEnvironment: true
         ).contains("MLXOK")
+    }
+
+    nonisolated private static func pythonCanImportMLXWhisper(_ python: String) -> Bool {
+        runPython(
+            python,
+            code: "import sys, importlib.util; print('WHISPEROK' if sys.version_info >= (3, 10) and importlib.util.find_spec('mlx_whisper') else '')",
+            cleanPythonEnvironment: true
+        ).contains("WHISPEROK")
     }
 
     nonisolated private static func pythonCanImportMLXQwen3ASR(_ python: String) -> Bool {
@@ -412,7 +588,7 @@ class EnvironmentChecker: ObservableObject {
             "/usr/bin/ffmpeg",
             "/bin/ffmpeg"
         ]
-        
+
         var ffmpegPath = ""
         for path in commonPaths {
             if FileManager.default.fileExists(atPath: path) && FileManager.default.isExecutableFile(atPath: path) {
@@ -420,7 +596,7 @@ class EnvironmentChecker: ObservableObject {
                 break
             }
         }
-        
+
         if ffmpegPath.isEmpty {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
@@ -435,7 +611,7 @@ class EnvironmentChecker: ObservableObject {
                 ffmpegPath = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             } catch {}
         }
-        
+
         if !ffmpegPath.isEmpty {
             let verTask = Process()
             verTask.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -455,7 +631,7 @@ class EnvironmentChecker: ObservableObject {
                 )
             } catch {}
         }
-        
+
         return DependencyStatus(
             name: "ffmpeg", icon: "play.rectangle.fill",
             isReady: false,
@@ -648,6 +824,52 @@ class EnvironmentChecker: ObservableObject {
         )
     }
 
+    nonisolated private static func checkWhisperMLXStatus(_ python: String) -> DependencyStatus {
+        let code = """
+        import importlib.util
+        spec = importlib.util.find_spec('mlx_whisper')
+        print('OK' if spec is not None else '')
+        """
+        let output = runPython(python, code: code, cleanPythonEnvironment: true)
+        return DependencyStatus(
+            name: "mlx-whisper", icon: "waveform",
+            isReady: output.contains("OK"),
+            message: output.contains("OK") ? "✓ MLX Whisper 已安装" : "✗ 此 Python 未安装 mlx_whisper"
+        )
+    }
+
+    nonisolated private static func checkWhisperMLXModelStatus(_ python: String, modelID: String) -> DependencyStatus {
+        let hasWhisper = pythonCanImportMLXWhisper(python)
+        guard hasWhisper else {
+            return DependencyStatus(
+                name: "mlx-model", icon: "cube.box.fill",
+                isReady: false,
+                message: "✗ 请先安装 mlx-whisper 依赖"
+            )
+        }
+        let sanitizedModelID = modelID.replacingOccurrences(of: "'", with: "")
+        let code = """
+        from pathlib import Path
+        model = '\(sanitizedModelID)'
+        local = Path(model).expanduser()
+        if local.exists():
+            print(str(local))
+        else:
+            try:
+                from huggingface_hub import snapshot_download
+                print(snapshot_download(repo_id=model, local_files_only=True))
+            except Exception:
+                print('')
+        """
+        let output = runPython(python, code: code, cleanPythonEnvironment: true)
+        let isReady = !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return DependencyStatus(
+            name: "mlx-model", icon: "cube.box.fill",
+            isReady: isReady,
+            message: isReady ? "✓ Whisper MLX 模型已缓存" : "✗ 未检测到 \(modelID)"
+        )
+    }
+
     nonisolated private static func checkMLXQwen3ASRStatus(_ python: String) -> DependencyStatus {
         let code = """
         import importlib.util
@@ -775,7 +997,7 @@ class EnvironmentChecker: ObservableObject {
         let threads = profile.threads
 
         switch engine {
-        case .vibeVoiceMLX, .qwen3ASR, .qwen3ASRVoiceprint:
+        case .vibeVoiceMLX, .whisperMLX, .qwen3ASR, .qwen3ASRVoiceprint:
             if memoryGB >= 32 && threads >= 4 {
                 return .high
             } else if memoryGB >= 16 {
@@ -895,6 +1117,12 @@ class EnvironmentChecker: ObservableObject {
             case .medium: requiredGB = 6.0
             case .low: requiredGB = 4.0
             }
+        case .whisperMLX:
+            switch currentTier {
+            case .high: requiredGB = 8.0
+            case .medium: requiredGB = 5.0
+            case .low: requiredGB = 3.0
+            }
         case .qwen3ASR:
             switch currentTier {
             case .high: requiredGB = 8.0
@@ -966,6 +1194,7 @@ class EnvironmentChecker: ObservableObject {
         switch runtimeSelection.engine {
         case .funASR:       pkgs = "funasr modelscope openai"
         case .vibeVoiceMLX: pkgs = "mlx-audio huggingface_hub openai"
+        case .whisperMLX:   pkgs = "mlx-whisper huggingface_hub openai"
         case .qwen3ASR:     pkgs = "\"mlx-qwen3-asr[diarize]\" huggingface_hub openai"
         case .qwen3ASRVoiceprint:
             pkgs = "\"mlx-qwen3-asr[diarize]\" huggingface_hub openai speechbrain torch torchaudio"
@@ -1006,7 +1235,7 @@ class EnvironmentChecker: ObservableObject {
         switch runtimeSelection.engine {
         case .funASR:
             script = "\"\(python)\" -c \"from funasr import AutoModel; AutoModel(model='paraformer-zh', vad_model='fsmn-vad', punc_model='ct-punc', spk_model='cam++', device='cpu', disable_update=True)\""
-        case .vibeVoiceMLX, .qwen3ASR:
+        case .vibeVoiceMLX, .whisperMLX, .qwen3ASR:
             let repo = runtimeSelection.modelID.replacingOccurrences(of: "\"", with: "")
             script = "\"\(python)\" -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='\(repo)')\""
         case .qwen3ASRVoiceprint:
@@ -1103,6 +1332,8 @@ class EnvironmentChecker: ObservableObject {
             return ["ffmpeg", "python3", "funasr", "models"]
         case .vibeVoiceMLX:
             return ["ffmpeg", "python3", "mlx-audio", "mlx-model"]
+        case .whisperMLX:
+            return ["ffmpeg", "python3", "mlx-whisper", "mlx-model"]
         case .qwen3ASR:
             return ["ffmpeg", "python3", "mlx-qwen3-asr", "qwen3-model"]
         case .qwen3ASRVoiceprint:

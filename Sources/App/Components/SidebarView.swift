@@ -72,7 +72,7 @@ struct SidebarView: View {
             // Navigation Menu
             VStack(spacing: 6) {
                 SidebarTabButton(title: "工作台", icon: "waveform", tab: .workspace, activeTab: $activeTab)
-                SidebarTabButton(title: "批量任务", icon: "queue.play.next", tab: .batchQueue, activeTab: $activeTab, badgeCount: 3)
+                SidebarTabButton(title: "批量任务", icon: "queue.play.next", tab: .batchQueue, activeTab: $activeTab)
                 SidebarTabButton(title: "人物归档", icon: "person.2.fill", tab: .people, activeTab: $activeTab)
                 SidebarTabButton(title: "交互校对", icon: "edit.note", tab: .editor, activeTab: $activeTab)
                 SidebarTabButton(title: "声纹库", icon: "person.wave.2", tab: .voiceprints, activeTab: $activeTab)
@@ -130,14 +130,12 @@ struct SidebarView: View {
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundColor(.white)
                         }
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(Color.white.opacity(0.05))
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(Color(hex: "8E81F6").opacity(0.6))
-                                    .frame(width: geo.size.width * CGFloat(cpuUsage))
-                            }
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.white.opacity(0.05))
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color(hex: "8E81F6").opacity(0.6))
+                                .scaleEffect(x: CGFloat(cpuUsage), y: 1.0, anchor: .leading)
                         }
                         .frame(height: 3)
                     }
@@ -153,14 +151,12 @@ struct SidebarView: View {
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundColor(.white)
                         }
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(Color.white.opacity(0.05))
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(Color(hex: "F5A623").opacity(0.6))
-                                    .frame(width: geo.size.width * CGFloat(gpuUsage))
-                            }
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.white.opacity(0.05))
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color(hex: "F5A623").opacity(0.6))
+                                .scaleEffect(x: CGFloat(gpuUsage), y: 1.0, anchor: .leading)
                         }
                         .frame(height: 3)
                     }
@@ -176,14 +172,12 @@ struct SidebarView: View {
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundColor(.white)
                         }
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(Color.white.opacity(0.05))
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(Color(hex: "4EC9B0").opacity(0.6))
-                                    .frame(width: geo.size.width * CGFloat(memoryUsage))
-                            }
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.white.opacity(0.05))
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color(hex: "4EC9B0").opacity(0.6))
+                                .scaleEffect(x: CGFloat(memoryUsage), y: 1.0, anchor: .leading)
                         }
                         .frame(height: 3)
                     }
@@ -235,14 +229,12 @@ struct SidebarView: View {
                                     .font(.system(size: 9, design: .monospaced))
                                     .foregroundColor(.white)
                             }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color.white.opacity(0.05))
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color(hex: "8E81F6").opacity(0.6))
-                                        .frame(width: geo.size.width * CGFloat(remoteCpuUsage))
-                                }
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.white.opacity(0.05))
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color(hex: "8E81F6").opacity(0.6))
+                                    .scaleEffect(x: CGFloat(remoteCpuUsage), y: 1.0, anchor: .leading)
                             }
                             .frame(height: 3)
                         }
@@ -258,14 +250,12 @@ struct SidebarView: View {
                                     .font(.system(size: 9, design: .monospaced))
                                     .foregroundColor(.white)
                             }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color.white.opacity(0.05))
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color(hex: "F5A623").opacity(0.6))
-                                        .frame(width: geo.size.width * CGFloat(remoteGpuUsage))
-                                }
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.white.opacity(0.05))
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color(hex: "F5A623").opacity(0.6))
+                                    .scaleEffect(x: CGFloat(remoteGpuUsage), y: 1.0, anchor: .leading)
                             }
                             .frame(height: 3)
                         }
@@ -281,14 +271,12 @@ struct SidebarView: View {
                                     .font(.system(size: 9, design: .monospaced))
                                     .foregroundColor(.white)
                             }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color.white.opacity(0.05))
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color(hex: "4EC9B0").opacity(0.6))
-                                        .frame(width: geo.size.width * CGFloat(remoteMemoryUsage))
-                                }
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.white.opacity(0.05))
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color(hex: "4EC9B0").opacity(0.6))
+                                    .scaleEffect(x: CGFloat(remoteMemoryUsage), y: 1.0, anchor: .leading)
                             }
                             .frame(height: 3)
                         }
@@ -304,14 +292,12 @@ struct SidebarView: View {
                                     .font(.system(size: 9, design: .monospaced))
                                     .foregroundColor(.white)
                             }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color.white.opacity(0.05))
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Color(hex: "7C6FE3").opacity(0.6))
-                                        .frame(width: geo.size.width * CGFloat(remoteDiskUsage))
-                                }
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.white.opacity(0.05))
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color(hex: "7C6FE3").opacity(0.6))
+                                    .scaleEffect(x: CGFloat(remoteDiskUsage), y: 1.0, anchor: .leading)
                             }
                             .frame(height: 3)
                         }

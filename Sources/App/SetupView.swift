@@ -122,7 +122,13 @@ struct SetupView: View {
 
                     Spacer()
 
-                    if envChecker.isChecking {
+                    if envChecker.isSilentInstalling {
+                        SilentInstallProgressCapsule(
+                            status: envChecker.silentInstallStatus,
+                            progress: envChecker.silentInstallProgress
+                        )
+                        .frame(width: 260)
+                    } else if envChecker.isChecking {
                         HStack(spacing: 6) {
                             ProgressView()
                                 .scaleEffect(0.7)
@@ -356,21 +362,30 @@ struct SetupView: View {
                 }
             }
 
-            if !envChecker.isInstallingDependency {
+            if !envChecker.isInstallingDependency && !envChecker.isSilentInstalling {
                 HStack(spacing: 8) {
                     if isMissingFFmpeg {
                         Button("安装 ffmpeg") { envChecker.installFFmpeg() }
                             .buttonStyle(.borderedProminent)
                     }
-                    if isMissingPythonDeps {
-                        Button("安装依赖") { envChecker.installPythonDependencies() }
-                            .buttonStyle(.borderedProminent)
+
+                    if !isMissingFFmpeg && (isMissingPythonDeps || isMissingModels) {
+                        Button("一键自动准备环境 (推荐)") {
+                            envChecker.startSilentDependencyInstall()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } else {
+                        if isMissingPythonDeps {
+                            Button("安装依赖") { envChecker.installPythonDependencies() }
+                                .buttonStyle(.borderedProminent)
+                        }
+                        if isMissingModels {
+                            Button("下载模型") { envChecker.installModels() }
+                                .buttonStyle(.bordered)
+                                .disabled(!canDownloadModelYet)
+                        }
                     }
-                    if isMissingModels {
-                        Button("下载模型") { envChecker.installModels() }
-                            .buttonStyle(.bordered)
-                            .disabled(!canDownloadModelYet)
-                    }
+
                     Button("重新检测") {
                         envChecker.installLog = ""
                         envChecker.installMessage = ""
@@ -398,7 +413,7 @@ struct SetupView: View {
     }
 
     private var isMissingPythonDeps: Bool {
-        envChecker.deps.contains { dep in !dep.isReady && ["funasr", "mlx-audio", "mlx-qwen3-asr"].contains(dep.name) }
+        envChecker.deps.contains { dep in !dep.isReady && ["funasr", "mlx-audio", "mlx-whisper", "mlx-qwen3-asr"].contains(dep.name) }
     }
 
     private var isMissingModels: Bool {

@@ -2,10 +2,33 @@ import Foundation
 import Combine
 import Darwin
 import AVFoundation
+import Network
 
 struct SpeakerNameApplyResult: Equatable {
     let success: Bool
     let message: String
+}
+
+struct TranscriptionRunResult: Identifiable, Equatable {
+    let id = UUID()
+    let audioPath: String
+    let outputDir: String
+    let transcriptPath: String?
+    let speakerMapPath: String?
+    let speakerTextPath: String?
+    let success: Bool
+    let cancelled: Bool
+    let errorMessage: String?
+}
+
+struct SummarizationRunResult: Identifiable, Equatable {
+    let id = UUID()
+    let audioPath: String
+    let outputDir: String
+    let summaryPath: String?
+    let success: Bool
+    let cancelled: Bool
+    let errorMessage: String?
 }
 
 private struct SpeakerNameApplyError: LocalizedError {
@@ -20,7 +43,7 @@ class Transcriber: ObservableObject {
     @Published var currentPlaybackTime: Double = 0
     @Published var audioDuration: Double = 0
     @Published var playbackSpeed: Double = 1.0
-    
+
     private var audioPlayer: AVAudioPlayer?
     private var playbackTimer: Timer?
     var currentAudioURL: URL?
@@ -43,8 +66,14 @@ class Transcriber: ObservableObject {
     @Published var generatedSummary: String? = nil
     @Published var lastKnownStageIndex: Int = 0
     @Published var isRemoteTranscription = false
+    @Published var lastRunResult: TranscriptionRunResult?
+    @Published var lastSummaryRunResult: SummarizationRunResult?
+    @Published private(set) var currentRunContext: TranscriptionRunContext = .interactive
 
     private var currentTask: Process?
+    private var ipcListener: NWListener?
+    private var ipcConnections: [NWConnection] = []
+    private var ipcBuffer = ""
     private var didRequestStop = false
     private var lastLoggedProgressStage = ""
     @Published var currentTranscriptSegments: [TranscriptSegment] = []
@@ -83,11 +112,15 @@ class Transcriber: ObservableObject {
         remoteServiceURL: String = "",
         remoteTailscaleURL: String = "",
         relayServiceURL: String = "",
-        speakerDiarizationEnabled: Bool = true
+        speakerDiarizationEnabled: Bool = true,
+        runContext: TranscriptionRunContext = .interactive
     ) {
         guard let audioURL = audioURL else { return }
         let outDir = outputDir ?? audioURL.deletingLastPathComponent()
 
+        lastRunResult = nil
+        lastSummaryRunResult = nil
+        currentRunContext = runContext
         didRequestStop = false
         lastLoggedProgressStage = ""
         currentAudioURL = audioURL
@@ -100,7 +133,7 @@ class Transcriber: ObservableObject {
         }
         playbackTimer?.invalidate()
         playbackTimer = nil
-        
+
         speakerRoles = []
         speakerRolesReady = false
         currentTranscriptURL = nil
@@ -187,6 +220,12 @@ class Transcriber: ObservableObject {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: pythonPath)
+        var extraArgs: [String] = []
+        if let ipcPort = startLocalIPCServer() {
+            extraArgs = ["--ipc-port", "\(ipcPort)"]
+            appendLog("[VoiceScribe] 本地 IPC 通信服务已启动，端口：\(ipcPort)")
+        }
+
         process.arguments = [
             scriptPath,
             audioURL.path,
@@ -198,7 +237,7 @@ class Transcriber: ObservableObject {
             "--batch-size-s", "\(effectiveProfile.batchSizeSeconds)",
             "--merge-length-s", "\(effectiveProfile.mergeLengthSeconds)",
             "--speaker-diarization", speakerDiarizationEnabled ? "1" : "0"
-        ]
+        ] + extraArgs
         process.environment = env
 
         currentTranscriptURL = outDir.appendingPathComponent("\(audioURL.deletingPathExtension().lastPathComponent)_通话记录.md")
@@ -256,11 +295,11 @@ class Transcriber: ObservableObject {
                 self.currentProgress = "检测远程连接..."
                 self.updateStageIndex(for: "检测远程")
                 self.appendLog("开始检测远程服务器连接...")
-                
+
                 let client = RemoteTranscriberClient()
                 var activeURL = ""
                 let isRelay = (executionTarget == .relay)
-                
+
                 if isRelay {
                     let relayClean = relayServiceURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     if relayClean.isEmpty {
@@ -285,7 +324,7 @@ class Transcriber: ObservableObject {
                             self.appendLog("⚠️ 局域网连接失败: \(error.localizedDescription)")
                         }
                     }
-                    
+
                     // 2. 如果局域网失败，且配置了 Tailscale，尝试检测 Tailscale 连接
                     if !primaryConnected {
                         let tsURL = remoteTailscaleURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -311,29 +350,29 @@ class Transcriber: ObservableObject {
                         }
                     }
                 }
-                
+
                 if activeURL.isEmpty {
                     activeURL = isRelay ? relayServiceURL.trimmingCharacters(in: .whitespacesAndNewlines) : remoteServiceURL.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
-                
+
                 // 记录当前活跃的 URL，用于停止任务等操作
                 self.remoteServiceURL = activeURL
-                
+
                 appendLog("开始上传音频到远程服务器: \(audioURL.lastPathComponent)")
                 currentProgress = "正在上传音频..."
                 self.updateStageIndex(for: "上传")
                 let uploadResult = try await client.uploadAudio(at: audioURL, serviceURL: activeURL, isRelay: isRelay)
                 appendLog("音频上传成功, ID: \(uploadResult.uploadID)")
-                
+
                 if self.didRequestStop {
                     self.markStoppedByUser()
                     return
                 }
-                
+
                 self.currentProgress = "提交转写任务..."
                 self.updateStageIndex(for: "提交")
                 self.appendLog("提交转写任务中...")
-                
+
                 var arguments: [String: String] = [
                     "engine": engine.scriptEngineRawValue,
                     "model_id": modelID.isEmpty ? engine.defaultModelID : modelID,
@@ -346,7 +385,7 @@ class Transcriber: ObservableObject {
                 if let token = UserDefaults.standard.string(forKey: "hfToken"), !token.isEmpty {
                     arguments["hf_token"] = token
                 }
-                
+
                 let taskStatus = try await client.createTask(
                     serviceURL: activeURL,
                     uploadID: uploadResult.uploadID,
@@ -356,13 +395,13 @@ class Transcriber: ObservableObject {
                 let taskID = taskStatus.taskID
                 self.remoteTaskID = taskID
                 self.appendLog("转写任务已创建, ID: \(taskID)")
-                
+
                 self.currentProgress = "正在排队/运行..."
                 self.appendLog("开始轮询任务状态...")
-                
+
                 self.transcriptionStartTime = Date()
                 self.startETATimer()
-                
+
                 var isDone = false
                 while !isDone {
                     if self.didRequestStop {
@@ -371,30 +410,30 @@ class Transcriber: ObservableObject {
                         self.markStoppedByUser()
                         return
                     }
-                    
+
                     try await Task.sleep(nanoseconds: 2_000_000_000)
-                    
+
                     if self.didRequestStop {
                         continue
                     }
-                    
+
                     let status = try await client.taskStatus(taskID: taskID, serviceURL: activeURL, isRelay: isRelay)
                     self.progress = min(status.progress, 0.99)
                     let remoteStage = status.currentStage ?? self.statusTitle(for: status.status)
                     self.currentProgress = remoteStage
                     self.updateStageIndex(for: remoteStage)
-                    
+
                     if let eta = status.estimatedTimeRemaining {
                         self.estimatedTimeRemaining = "预计剩余 \(eta)"
                     }
-                    
+
                     if status.status == "completed" {
                         isDone = true
                         self.appendLog("远程转写任务执行成功，开始下载结果文件...")
                         self.currentProgress = "正在下载结果..."
                         self.updateStageIndex(for: "下载")
                         var downloadedResultURLs: [String: URL] = [:]
-                        
+
                         for file in status.results {
                             let (tempURL, _) = try await client.downloadResult(
                                 taskID: taskID,
@@ -410,12 +449,12 @@ class Transcriber: ObservableObject {
                             self.appendLog("已下载产物: \(file.filename)")
                             downloadedResultURLs[Self.remoteResultCategory(for: file)] = destURL
                         }
-                        
+
                         self.currentProgress = "完成 ✓"
                         self.updateStageIndex(for: "完成 ✓")
                         self.progress = 1.0
                         self.appendLog("✓ 所有产物下载并保存成功。")
-                        
+
                         let baseName = audioURL.deletingPathExtension().lastPathComponent
                         self.currentTranscriptURL = downloadedResultURLs["transcript"]
                             ?? outDir.appendingPathComponent("\(baseName)_通话记录.md")
@@ -429,20 +468,22 @@ class Transcriber: ObservableObject {
                             self.appendLog("[Voiceprint] 开始读取本地声纹库匹配已知人物")
                             await self.runVoiceprintMatchingIfNeeded()
                         }
-                        
+
                         self.loadSpeakerRolesIfNeeded()
                         self.createHistoryEntry()
                         self.buildCompletionSummary()
-                        
+                        self.lastRunResult = self.makeRunResult(success: true, cancelled: false, errorMessage: nil)
+
                         self.isTranscribing = false
                         self.stopETATimer()
                         self.remoteTaskID = nil
-                        
+
                     } else if status.status == "failed" {
                         isDone = true
                         let errorMsg = status.error?.message ?? "未知错误"
                         self.appendLog("❌ 远程转写失败: \(errorMsg)")
                         self.progress = 0
+                        self.lastRunResult = self.makeRunResult(success: false, cancelled: false, errorMessage: errorMsg)
                         self.isTranscribing = false
                         self.stopETATimer()
                         self.remoteTaskID = nil
@@ -451,6 +492,7 @@ class Transcriber: ObservableObject {
             } catch {
                 self.appendLog("❌ 远程转写出错: \(error.localizedDescription)")
                 self.progress = 0
+                self.lastRunResult = self.makeRunResult(success: false, cancelled: false, errorMessage: error.localizedDescription)
                 self.isTranscribing = false
                 self.stopETATimer()
                 self.remoteTaskID = nil
@@ -552,6 +594,8 @@ class Transcriber: ObservableObject {
     }
 
     private func markStoppedByUser() {
+        let stoppedSummarization = isSummarizing
+        stopLocalIPCServer()
         progress = 0
         currentProgress = "已停止"
         isTranscribing = false
@@ -560,6 +604,15 @@ class Transcriber: ObservableObject {
         didRequestStop = false
         stopETATimer()
         appendLog("已停止")
+        if stoppedSummarization {
+            lastSummaryRunResult = makeSummaryRunResult(
+                success: false,
+                cancelled: true,
+                errorMessage: "用户停止"
+            )
+        } else {
+            lastRunResult = makeRunResult(success: false, cancelled: true, errorMessage: "用户停止")
+        }
     }
 
     func startSummarization(audioURL: URL?, outputDir: URL?, model: LLMModel, pythonPath: String, summaryPrompt: String = "") {
@@ -570,9 +623,36 @@ class Transcriber: ObservableObject {
         let fallbackPath = outDir.appendingPathComponent("\(baseName)_通话记录.md")
         let inputPath = FileManager.default.fileExists(atPath: speakerTextPath.path) ? speakerTextPath : fallbackPath
 
+        lastSummaryRunResult = nil
+        currentAudioURL = audioURL
+        currentOutputDir = outDir
+        currentTranscriptTitle = baseName
+
+        guard FileManager.default.fileExists(atPath: inputPath.path) else {
+            let message = "缺少可用于 AI 整理的转写文件"
+            appendLog("✗ \(message)")
+            lastSummaryRunResult = makeSummaryRunResult(
+                success: false,
+                cancelled: false,
+                errorMessage: message
+            )
+            return
+        }
+        guard FileManager.default.isExecutableFile(atPath: pythonPath) else {
+            let message = "Python 环境不可用，无法执行 AI 整理"
+            appendLog("✗ \(message)")
+            lastSummaryRunResult = makeSummaryRunResult(
+                success: false,
+                cancelled: false,
+                errorMessage: message
+            )
+            return
+        }
+
         didRequestStop = false
         isSummarizing = true
         isTranscribing = false
+        generatedSummary = nil
         logs = []
         lastLoggedProgressStage = ""
         progress = 0
@@ -616,6 +696,12 @@ class Transcriber: ObservableObject {
         } catch {
             appendLog("启动失败: \(error.localizedDescription)")
             isSummarizing = false
+            currentTask = nil
+            lastSummaryRunResult = makeSummaryRunResult(
+                success: false,
+                cancelled: false,
+                errorMessage: error.localizedDescription
+            )
         }
     }
 
@@ -746,6 +832,7 @@ class Transcriber: ObservableObject {
     }
 
     private func handleTermination(status: Int32) {
+        stopLocalIPCServer()
         stopMemoryMonitor()
         stopETATimer()
 
@@ -770,9 +857,15 @@ class Transcriber: ObservableObject {
             appendLog("✗ 转写失败 (exit: \(status))")
             appendErrorSuggestion(for: status)
             progress = 0
+            lastRunResult = makeRunResult(success: false, cancelled: false, errorMessage: "转写失败 (exit: \(status))")
         } else if isSummarizing {
             appendLog("✗ 总结失败 (exit: \(status))")
             progress = 0
+            lastSummaryRunResult = makeSummaryRunResult(
+                success: false,
+                cancelled: false,
+                errorMessage: "AI 整理失败 (exit: \(status))"
+            )
         }
         isTranscribing = false
         isSummarizing = false
@@ -786,10 +879,17 @@ class Transcriber: ObservableObject {
         appendLog("✓ 完成")
         if isSummarizing {
             loadSummaryIfExists()
+            let summaryResult = makeSummaryRunResult(
+                success: generatedSummary != nil,
+                cancelled: false,
+                errorMessage: generatedSummary == nil ? "AI 整理完成但未找到摘要文件" : nil
+            )
+            lastSummaryRunResult = summaryResult
         } else {
             loadSpeakerRolesIfNeeded()
             createHistoryEntry()
             buildCompletionSummary()
+            lastRunResult = makeRunResult(success: true, cancelled: false, errorMessage: nil)
         }
         isTranscribing = false
         isSummarizing = false
@@ -1103,6 +1203,39 @@ class Transcriber: ObservableObject {
         )
     }
 
+    private func makeRunResult(success: Bool, cancelled: Bool, errorMessage: String?) -> TranscriptionRunResult? {
+        guard let audioURL = currentAudioURL, let outputDir = currentOutputDir else { return nil }
+        return TranscriptionRunResult(
+            audioPath: audioURL.path,
+            outputDir: outputDir.path,
+            transcriptPath: currentTranscriptURL?.path,
+            speakerMapPath: currentSpeakerMapURL?.path,
+            speakerTextPath: currentSpeakerTextURL?.path,
+            success: success,
+            cancelled: cancelled,
+            errorMessage: errorMessage
+        )
+    }
+
+    private func makeSummaryRunResult(
+        success: Bool,
+        cancelled: Bool,
+        errorMessage: String?
+    ) -> SummarizationRunResult? {
+        guard let audioURL = currentAudioURL, let outputDir = currentOutputDir else { return nil }
+        let summaryURL = outputDir.appendingPathComponent(
+            "\(audioURL.deletingPathExtension().lastPathComponent)_摘要.md"
+        )
+        return SummarizationRunResult(
+            audioPath: audioURL.path,
+            outputDir: outputDir.path,
+            summaryPath: FileManager.default.fileExists(atPath: summaryURL.path) ? summaryURL.path : nil,
+            success: success,
+            cancelled: cancelled,
+            errorMessage: errorMessage
+        )
+    }
+
     // MARK: - 错误建议
 
     private func appendErrorSuggestion(for exitCode: Int32) {
@@ -1146,7 +1279,7 @@ class Transcriber: ObservableObject {
             initializeAudioPlayer()
         }
         guard let player = audioPlayer else { return }
-        
+
         if player.isPlaying {
             player.pause()
             isAudioPlaying = false
@@ -1211,6 +1344,96 @@ class Transcriber: ObservableObject {
         playbackTimer = nil
     }
 
+    // MARK: - Local IPC TCP Server
+
+    private func startLocalIPCServer() -> UInt16? {
+        ipcBuffer = ""
+        let semaphore = DispatchSemaphore(value: 0)
+        var allocatedPort: UInt16? = nil
+
+        do {
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host("127.0.0.1"), port: .any)
+            let listener = try NWListener(using: parameters)
+
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    allocatedPort = listener.port?.rawValue
+                    semaphore.signal()
+                case .failed(let error):
+                    print("IPC NWListener failed: \(error)")
+                    semaphore.signal()
+                default:
+                    break
+                }
+            }
+
+            listener.newConnectionHandler = { [weak self] connection in
+                guard let self = self else { return }
+                DispatchQueue.main.async {
+                    self.ipcConnections.append(connection)
+                    connection.stateUpdateHandler = { [weak self] state in
+                        guard let self = self else { return }
+                        DispatchQueue.main.async {
+                            if case .failed = state {
+                                self.ipcConnections.removeAll(where: { $0 === connection })
+                            } else if case .cancelled = state {
+                                self.ipcConnections.removeAll(where: { $0 === connection })
+                            }
+                        }
+                    }
+                    connection.start(queue: .main)
+                    self.receiveMessage(on: connection)
+                }
+            }
+
+            let listenerQueue = DispatchQueue(label: "com.voicescribe.ipc.listener")
+            listener.start(queue: listenerQueue)
+            self.ipcListener = listener
+
+            _ = semaphore.wait(timeout: .now() + 2.0)
+            return allocatedPort
+        } catch {
+            appendLog("⚠️ 启动本地 IPC 服务端失败: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func stopLocalIPCServer() {
+        ipcListener?.cancel()
+        ipcListener = nil
+        for conn in ipcConnections {
+            conn.cancel()
+        }
+        ipcConnections.removeAll()
+        ipcBuffer = ""
+    }
+
+    private func receiveMessage(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                if let data = content, !data.isEmpty {
+                    if let text = String(data: data, encoding: .utf8) {
+                        self.ipcBuffer += text
+                        while let newlineIndex = self.ipcBuffer.firstIndex(of: "\n") {
+                            let line = String(self.ipcBuffer[..<newlineIndex])
+                            self.ipcBuffer.removeSubrange(..<self.ipcBuffer.index(after: newlineIndex))
+                            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                self.parseProgressJSON(trimmed)
+                            }
+                        }
+                    }
+                }
+                if error == nil && !isComplete {
+                    self.receiveMessage(on: connection)
+                }
+            }
+        }
+    }
+
     // MARK: - Timeline Stage Processing & Proofreading Support
 
     func updateStageIndex(for stageStr: String) {
@@ -1222,7 +1445,7 @@ class Transcriber: ObservableObject {
             lastKnownStageIndex = isRemote ? 6 : 4
             return
         }
-        
+
         let index: Int
         if isRemote {
             if stageStr.contains("检测远程") || stageStr.contains("上传") {
@@ -1264,8 +1487,8 @@ class Transcriber: ObservableObject {
         let isRemote = self.isRemoteTranscription
         let currentIdx = self.lastKnownStageIndex
         let isFailed = self.currentProgress.contains("失败") || self.currentProgress.contains("failed")
-        let isCompleted = self.currentProgress.contains("完成") || self.currentProgress.contains("completed") || self.progress >= 1.0
-        
+        let isCompleted = self.currentProgress == "完成" || self.currentProgress == "完成 ✓" || self.currentProgress == "completed" || self.progress >= 1.0
+
         let titles: [String]
         if isRemote {
             titles = [
@@ -1286,7 +1509,7 @@ class Transcriber: ObservableObject {
                 "保存转译结果"
             ]
         }
-        
+
         return titles.enumerated().map { (index, title) in
             let status: StageStatus
             if isCompleted {
@@ -1313,6 +1536,7 @@ class Transcriber: ObservableObject {
     }
 
     func loadHistoryEntry(_ entry: TranscriptionHistoryEntry) {
+        currentRunContext = .interactive
         // Reset player
         isAudioPlaying = false
         currentPlaybackTime = 0
@@ -1323,17 +1547,17 @@ class Transcriber: ObservableObject {
         }
         playbackTimer?.invalidate()
         playbackTimer = nil
-        
+
         let outDir = URL(fileURLWithPath: entry.outputDir)
         let baseName = entry.fileName
-        
+
         currentTranscriptTitle = baseName
         currentOutputDir = outDir
-        
+
         currentTranscriptURL = outDir.appendingPathComponent("\(baseName)_通话记录.md")
         currentSpeakerMapURL = outDir.appendingPathComponent("\(baseName)_speaker_map.json")
         currentSpeakerTextURL = outDir.appendingPathComponent("\(baseName)_整理版.md")
-        
+
         // Try to locate audio file
         var foundAudioURL: URL? = nil
         if let path = entry.audioPath, FileManager.default.fileExists(atPath: path) {
@@ -1354,14 +1578,14 @@ class Transcriber: ObservableObject {
                 }
             }
         }
-        
+
         if let audioURL = foundAudioURL {
             currentAudioURL = audioURL
             initializeAudioPlayer()
         } else {
             currentAudioURL = nil
         }
-        
+
         // Load speaker roles and segments
         loadSpeakerRolesIfNeeded()
         loadSummaryIfExists()
@@ -1381,6 +1605,42 @@ class Transcriber: ObservableObject {
         saveTranscriptionChanges()
     }
 
+    func updateSegmentSpeaker(index: Int, role: SpeakerRole) {
+        guard index >= 0 && index < currentTranscriptSegments.count else { return }
+        let oldSeg = currentTranscriptSegments[index]
+        let newSeg = TranscriptSegment(
+            speakerKey: role.key,
+            placeholder: role.placeholder,
+            start: oldSeg.start,
+            end: oldSeg.end,
+            text: oldSeg.text
+        )
+        currentTranscriptSegments[index] = newSeg
+        saveTranscriptionChanges()
+    }
+
+    func addNewSpeakerRole() {
+        let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        var nextIndex = speakerRoles.count
+        var key = "\(nextIndex)"
+        while speakerRoles.contains(where: { $0.key == key }) {
+            nextIndex += 1
+            key = "\(nextIndex)"
+        }
+
+        let placeholder: String
+        if nextIndex < alphabet.count {
+            let charIndex = alphabet.index(alphabet.startIndex, offsetBy: nextIndex)
+            placeholder = "角色\(alphabet[charIndex])"
+        } else {
+            placeholder = "角色\(nextIndex + 1)"
+        }
+
+        let newRole = SpeakerRole(key: key, placeholder: placeholder, displayName: "")
+        speakerRoles.append(newRole)
+        saveTranscriptionChanges()
+    }
+
     func saveTranscriptionChanges() {
         // 1. Save back to _speaker_map.json
         if let mapURL = currentSpeakerMapURL {
@@ -1393,10 +1653,10 @@ class Transcriber: ObservableObject {
                 try? data.write(to: mapURL)
             }
         }
-        
+
         // 2. Rebuild _整理版.md (uses display names)
         _ = try? rebuildSpeakerText()
-        
+
         // 3. Rebuild _通话记录.md (uses placeholders)
         rebuildTranscriptText()
     }

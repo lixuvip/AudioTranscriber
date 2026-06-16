@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PersonCallsPane: View {
     @ObservedObject var store: PersonTimelineStore
+    @State private var expandedCallIDs: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,6 +76,7 @@ struct PersonCallsPane: View {
 
     private func callRow(_ call: PersonTimelineCall) -> some View {
         let isSelected = store.selectedCallIDs.contains(call.id)
+        let isExpanded = expandedCallIDs.contains(call.id)
         let source = call.sourceStatus
         return HStack(alignment: .top, spacing: 10) {
             Button {
@@ -111,6 +113,19 @@ struct PersonCallsPane: View {
                         .padding(.vertical, 2)
                         .background(.quaternary.opacity(0.7))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                    if source.isAvailable {
+                        Button {
+                            toggleExpanded(call.id)
+                        } label: {
+                            Image(systemName: isExpanded ? "chevron.up.circle.fill" : "chevron.down.circle")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(isExpanded ? Color.accentColor : Color.secondary)
+                                .frame(width: 18, height: 18)
+                        }
+                        .buttonStyle(.plain)
+                        .help(isExpanded ? "收起摘要" : "展开摘要")
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -121,17 +136,40 @@ struct PersonCallsPane: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-                Text(previewText(for: call, source: source))
-                    .font(.system(size: 11))
-                    .foregroundStyle(call.isAvailable ? Color.secondary : Color.secondary.opacity(0.7))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                if isExpanded {
+                    expandedPreview(
+                        previewText(for: call, source: source, expanded: true),
+                        isAvailable: call.isAvailable
+                    )
+                } else {
+                    Text(previewText(for: call, source: source, expanded: false))
+                        .font(.system(size: 11))
+                        .foregroundStyle(call.isAvailable ? Color.secondary : Color.secondary.opacity(0.7))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.vertical, 10)
             .padding(.trailing, 12)
         }
         .padding(.leading, 12)
         .background(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
+    }
+
+    private func expandedPreview(_ text: String, isAvailable: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(isAvailable ? Color.secondary : Color.secondary.opacity(0.7))
+            .textSelection(.enabled)
+            .lineLimit(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+            }
     }
 
     private func emptyState(icon: String, title: String, detail: String) -> some View {
@@ -172,9 +210,18 @@ struct PersonCallsPane: View {
         }
     }
 
+    private func toggleExpanded(_ callID: String) {
+        if expandedCallIDs.contains(callID) {
+            expandedCallIDs.remove(callID)
+        } else {
+            expandedCallIDs.insert(callID)
+        }
+    }
+
     private func previewText(
         for call: PersonTimelineCall,
-        source: PersonTimelineCall.SourceStatus
+        source: PersonTimelineCall.SourceStatus,
+        expanded: Bool
     ) -> String {
         if !source.isAvailable {
             return source.reason
@@ -185,7 +232,12 @@ struct PersonCallsPane: View {
         guard FileManager.default.fileExists(atPath: call.entry.summaryPath) else {
             return "摘要缺失：文件不存在"
         }
-        return Self.readPreview(from: call.entry.summaryPath)
+        return Self.readPreview(
+            from: call.entry.summaryPath,
+            byteLimit: expanded ? 65_536 : 8_192,
+            characterLimit: expanded ? 3_000 : 140,
+            preserveLineBreaks: expanded
+        )
             ?? "摘要缺失：文件为空"
     }
 
@@ -203,7 +255,12 @@ struct PersonCallsPane: View {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    private static func readPreview(from path: String) -> String? {
+    private static func readPreview(
+        from path: String,
+        byteLimit: Int,
+        characterLimit: Int,
+        preserveLineBreaks: Bool
+    ) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else {
             return nil
         }
@@ -211,17 +268,20 @@ struct PersonCallsPane: View {
             try? handle.close()
         }
 
-        let data = handle.readData(ofLength: 8_192)
+        let data = handle.readData(ofLength: byteLimit)
         guard let content = String(data: data, encoding: .utf8) else {
             return nil
         }
-        let compact = content
+        let lines = content
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        guard !compact.isEmpty else { return nil }
-        return String(compact.prefix(120))
+        let normalized = lines.joined(separator: preserveLineBreaks ? "\n" : " ")
+        guard !normalized.isEmpty else { return nil }
+        if normalized.count > characterLimit {
+            return String(normalized.prefix(characterLimit)) + "..."
+        }
+        return normalized
     }
 }
 

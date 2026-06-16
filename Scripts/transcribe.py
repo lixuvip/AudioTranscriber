@@ -3,7 +3,7 @@
 VoiceScribe - 转写脚本
 用法: python3 transcribe.py <音频路径> <输出目录>
 """
-import os, sys, json, time, gc
+import os, sys, json, time, gc, socket
 os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "")
 import argparse
 import subprocess
@@ -24,6 +24,7 @@ parser.add_argument("--batch-size-s", type=int, default=60)
 parser.add_argument("--merge-length-s", type=int, default=15)
 parser.add_argument("--speaker-diarization", default="1")
 parser.add_argument("--language", default="zh")
+parser.add_argument("--ipc-port", type=int, default=None)
 args = parser.parse_args()
 
 audio_path = args.audio_path
@@ -46,6 +47,59 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 # ---- 结构化进度输出 ----
+import atexit
+
+ipc_socket = None
+
+def init_ipc():
+    global ipc_socket
+    if args.ipc_port is not None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5.0)
+            s.connect(("127.0.0.1", args.ipc_port))
+            ipc_socket = s
+        except Exception as e:
+            print(f"[IPC Error] Failed to connect to IPC port {args.ipc_port}: {e}", file=sys.stderr, flush=True)
+
+def close_ipc():
+    global ipc_socket
+    if ipc_socket is not None:
+        try:
+            ipc_socket.close()
+        except Exception:
+            pass
+        ipc_socket = None
+
+init_ipc()
+atexit.register(close_ipc)
+
+def send_ipc_payload(payload):
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    global ipc_socket
+    if args.ipc_port is not None:
+        if ipc_socket is None:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(2.0)
+                s.connect(("127.0.0.1", args.ipc_port))
+                ipc_socket = s
+            except Exception:
+                pass
+
+        if ipc_socket is not None:
+            try:
+                data = json.dumps(payload, ensure_ascii=False) + "\n"
+                ipc_socket.sendall(data.encode('utf-8'))
+            except Exception as e:
+                print(f"[IPC Error] Failed to send TCP payload to port {args.ipc_port}: {e}", file=sys.stderr, flush=True)
+                try:
+                    ipc_socket.close()
+                except Exception:
+                    pass
+                ipc_socket = None
+
+
 def emit_progress(stage, percent, processed_seconds=0, total_seconds=0):
     """输出 JSON 格式的进度信息供 Swift 端解析"""
     payload = {
@@ -55,13 +109,13 @@ def emit_progress(stage, percent, processed_seconds=0, total_seconds=0):
         "processed_seconds": round(processed_seconds, 1),
         "total_seconds": round(total_seconds, 1),
     }
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    send_ipc_payload(payload)
 
 
 def emit_duration(total_seconds):
     """输出音频总时长"""
     payload = {"type": "duration", "total_seconds": round(total_seconds, 1)}
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    send_ipc_payload(payload)
 
 
 def emit_error(code, message, suggestion=""):
@@ -72,7 +126,7 @@ def emit_error(code, message, suggestion=""):
         "message": message,
         "suggestion": suggestion,
     }
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    send_ipc_payload(payload)
 
 
 def emit_log(message, level="info"):
@@ -82,7 +136,7 @@ def emit_log(message, level="info"):
         "level": level,
         "message": message,
     }
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    send_ipc_payload(payload)
 
 
 def format_seconds(seconds):
@@ -93,8 +147,11 @@ def format_seconds(seconds):
     return f"{sec}秒"
 
 
+_qwen3_chunk_start_times = {}
+
 def emit_qwen3_progress(event):
     """把 mlx-qwen3-asr 的内部进度转换为 VoiceScribe 进度与日志。"""
+    global _qwen3_chunk_start_times
     name = str(event.get("event", "progress"))
     total_chunks = int(event.get("total_chunks") or event.get("file_total") or 1)
     chunk_index = int(event.get("chunk_index") or event.get("file_index") or 0)
@@ -109,11 +166,27 @@ def emit_qwen3_progress(event):
         emit_progress(f"Qwen3-ASR 已切分 {total_chunks} 个音频块", 28, 0, audio_total)
         emit_log(f"Qwen3-ASR 已切分为 {total_chunks} 个音频块，开始 MLX 转写")
     elif name == "chunk_started":
+        _qwen3_chunk_start_times[chunk_index] = time.time()
         emit_progress(f"Qwen3-ASR 转写音频块 {chunk_index}/{total_chunks}", percent, processed, audio_total)
         emit_log(f"Qwen3-ASR 正在转写音频块 {chunk_index}/{total_chunks}")
     elif name == "chunk_completed":
+        elapsed = 0.0
+        if chunk_index in _qwen3_chunk_start_times:
+            elapsed = time.time() - _qwen3_chunk_start_times[chunk_index]
+        chunk_dur = float(event.get("chunk_duration_sec") or 0)
+        tokens = int(event.get("generated_tokens") or 0)
+        speed_msg = f"Qwen3-ASR 已完成音频块 {chunk_index}/{total_chunks}"
+        if elapsed > 0:
+            rtf = chunk_dur / elapsed
+            if tokens > 0:
+                tok_sec = tokens / elapsed
+                speed_msg += f" (耗时: {elapsed:.2f}秒, 速度: {rtf:.1f}x 倍速, {tok_sec:.1f} tokens/s)"
+            else:
+                speed_msg += f" (耗时: {elapsed:.2f}秒, 速度: {rtf:.1f}x 倍速)"
+        else:
+            speed_msg += f" (已完成)"
         emit_progress(f"Qwen3-ASR 完成音频块 {chunk_index}/{total_chunks}", percent, processed, audio_total)
-        emit_log(f"Qwen3-ASR 已完成音频块 {chunk_index}/{total_chunks}")
+        emit_log(speed_msg)
     elif name == "diarization_completed":
         count = int(event.get("speaker_segment_count") or 0)
         emit_progress("pyannote 说话人分离完成", 90, audio_total, audio_total)
@@ -413,6 +486,59 @@ def format_mlx_markdown(result):
     return payload, lines, roles, normalized_segments
 
 
+def format_whisper_mlx_markdown(result):
+    """Format mlx-whisper dict output into the shared transcript and speaker-map contract."""
+    if not isinstance(result, dict):
+        text, segments = _unwrap_result_object(result)
+        payload = {"engine": "whisperMLX", "text": text, "segments": segments}
+    else:
+        payload = {
+            "engine": "whisperMLX",
+            "text": result.get("text", ""),
+            "language": result.get("language"),
+            "segments": result.get("segments", []),
+        }
+
+    speaker_mapping, roles = build_role_mapping(["0"])
+    placeholder = speaker_mapping["0"]
+    lines = [f"# {base} 通话记录\n"]
+    normalized_segments = []
+    segments = payload.get("segments") or []
+
+    for seg in segments:
+        text = (seg.get("text", "") or "").strip()
+        if not text:
+            continue
+        start = float(seg.get("start", 0) or 0)
+        end = float(seg.get("end", start) or start)
+        t_start = seconds_to_timestamp(start)
+        lines.append(f"[{t_start}] 【{placeholder}】 {text}")
+        normalized_segments.append({
+            "speakerKey": "0",
+            "placeholder": placeholder,
+            "start": start,
+            "end": end,
+            "text": text,
+        })
+
+    if not normalized_segments:
+        text = str(payload.get("text") or "").strip()
+        if text:
+            lines.append(text)
+            normalized_segments.append({
+                "speakerKey": "0",
+                "placeholder": placeholder,
+                "start": 0.0,
+                "end": 0.0,
+                "text": text,
+            })
+        else:
+            emit_error("no_segments", "Whisper MLX produced no output", "Check if audio contains valid speech")
+            sys.exit(1)
+
+    return payload, lines, roles, normalized_segments
+
+
 def format_qwen3_markdown(result, diarize_enabled):
     """Parse mlx-qwen3-asr TranscriptionResult into markdown + normalized segments."""
     if diarize_enabled and result.speaker_segments:
@@ -565,7 +691,14 @@ if args.engine == "vibeVoiceMLX":
         emit_progress("加载 MLX 模型...", 15, 0, audio_duration or 0)
         model = load(args.model_id)
         emit_progress("MLX 转写中...", 25, 0, audio_duration or 0)
+        mlx_start = time.time()
         res = model.generate(prepared_audio_path)
+        mlx_elapsed = time.time() - mlx_start
+        if audio_duration and mlx_elapsed > 0:
+            mlx_rtf = audio_duration / mlx_elapsed
+            emit_log(f"MLX 转写完成 (耗时: {mlx_elapsed:.2f}秒, 速度: {mlx_rtf:.1f}x 倍速)")
+        else:
+            emit_log(f"MLX 转写完成 (耗时: {mlx_elapsed:.2f}秒)")
         emit_progress("解析结果...", 90, audio_duration or 0, audio_duration or 0)
         save_payload, lines, roles, normalized_segments = format_mlx_markdown(res)
     except MemoryError:
@@ -573,6 +706,38 @@ if args.engine == "vibeVoiceMLX":
         sys.exit(137)
     except Exception as e:
         emit_error("transcription_failed", f"VibeVoice MLX 转写失败: {e}", "请检查模型是否已正确下载，或尝试重新预热环境")
+        sys.exit(1)
+elif args.engine == "whisperMLX":
+    try:
+        import mlx_whisper
+    except ModuleNotFoundError:
+        emit_error("missing_dependency", "当前 Python 环境未安装 mlx-whisper", "请在设置中点击'安装依赖'按钮")
+        sys.exit(1)
+
+    try:
+        emit_progress("加载 Whisper MLX 模型...", 15, 0, audio_duration or 0)
+        whisper_start = time.time()
+        result = mlx_whisper.transcribe(
+            prepared_audio_path,
+            path_or_hf_repo=args.model_id,
+            language=args.language,
+            task="transcribe",
+            verbose=False,
+            initial_prompt="以下是简体中文的转录内容：",
+        )
+        whisper_elapsed = time.time() - whisper_start
+        if audio_duration and whisper_elapsed > 0:
+            whisper_rtf = audio_duration / whisper_elapsed
+            emit_log(f"Whisper MLX 转写完成 (耗时: {whisper_elapsed:.2f}秒, 速度: {whisper_rtf:.1f}x 倍速)")
+        else:
+            emit_log(f"Whisper MLX 转写完成 (耗时: {whisper_elapsed:.2f}秒)")
+        emit_progress("解析结果...", 90, audio_duration or 0, audio_duration or 0)
+        save_payload, lines, roles, normalized_segments = format_whisper_mlx_markdown(result)
+    except MemoryError:
+        emit_error("out_of_memory", "内存不足，Whisper MLX 模型加载或转写过程中耗尽内存", "请降低性能档位或改用更小的 Whisper 模型")
+        sys.exit(137)
+    except Exception as e:
+        emit_error("transcription_failed", f"Whisper MLX 转写失败: {e}", "请检查 mlx-whisper 依赖和模型缓存是否已准备好")
         sys.exit(1)
 elif args.engine == "qwen3ASR":
     # ---- Qwen3-ASR via Python API (supports speaker diarization) ----
@@ -684,6 +849,7 @@ else:
         model = AutoModel(**model_kwargs)
 
         emit_progress("转写中...", 25, 0, audio_duration or 0)
+        funasr_start = time.time()
 
         # Generate with model-appropriate parameters
         if "SenseVoice" in model_id:
@@ -705,6 +871,12 @@ else:
                 merge_length_s=args.merge_length_s,
                 language=args.language,
             )
+        funasr_elapsed = time.time() - funasr_start
+        if audio_duration and funasr_elapsed > 0:
+            funasr_rtf = audio_duration / funasr_elapsed
+            emit_log(f"FunASR 转写完成 (耗时: {funasr_elapsed:.2f}秒, 速度: {funasr_rtf:.1f}x 倍速)")
+        else:
+            emit_log(f"FunASR 转写完成 (耗时: {funasr_elapsed:.2f}秒)")
 
         emit_progress("解析结果...", 90, audio_duration or 0, audio_duration or 0)
         save_payload, lines, roles, normalized_segments = format_funasr_markdown(res)

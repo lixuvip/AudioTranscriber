@@ -43,6 +43,7 @@ enum RuntimeEnvironment: String, CaseIterable, Identifiable {
 enum TranscriptionEngine: String, CaseIterable, Identifiable {
     case funASR
     case vibeVoiceMLX
+    case whisperMLX
     case qwen3ASR
     case qwen3ASRVoiceprint
 
@@ -54,6 +55,8 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return "FunASR + cam++"
         case .vibeVoiceMLX:
             return "VibeVoice MLX"
+        case .whisperMLX:
+            return "Whisper MLX"
         case .qwen3ASR:
             return "Qwen3-ASR"
         case .qwen3ASRVoiceprint:
@@ -66,7 +69,9 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         case .funASR:
             return "本地转写引擎；paraformer 可配合 cam++ 区分说话人并生成角色段落，不读取声纹库。SenseVoice/Fun-ASR-Nano 仅做转写或弱分段。"
         case .vibeVoiceMLX:
-            return "Apple Silicon MLX 本地转写；主要负责高效 ASR 和时间戳解析，当前不接入声纹库，不能直接用已采集声纹识别具体人物。"
+            return "Apple Silicon MLX 本地转写；支持自动区分说话人，提供高效 ASR 与时间戳解析。当前不接入声纹库，不能直接用已采集声纹识别具体人物。"
+        case .whisperMLX:
+            return "OpenAI Whisper 的 MLX 路线，适合 Apple Silicon 上的中文转写和字幕型文本输出；不做说话人区分，也不读取声纹库。"
         case .qwen3ASR:
             return "Apple Silicon MLX 转写引擎；可选 pyannote 做多说话人区分，适合中文和方言。声纹库暂不参与在线识别，只用于后续人物样本沉淀。"
         case .qwen3ASRVoiceprint:
@@ -77,7 +82,7 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
     static func available(for environment: RuntimeEnvironment) -> [TranscriptionEngine] {
         switch environment {
         case .macAppleSilicon:
-            return [.vibeVoiceMLX, .qwen3ASR, .qwen3ASRVoiceprint, .funASR]
+            return [.vibeVoiceMLX, .whisperMLX, .qwen3ASR, .qwen3ASRVoiceprint, .funASR]
         }
     }
 
@@ -87,6 +92,8 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return "paraformer-zh + cam++"
         case .vibeVoiceMLX:
             return "mlx-community/VibeVoice-ASR-4bit"
+        case .whisperMLX:
+            return "mlx-community/whisper-large-v3-turbo"
         case .qwen3ASR:
             return "Qwen/Qwen3-ASR-0.6B"
         case .qwen3ASRVoiceprint:
@@ -105,6 +112,13 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         case .vibeVoiceMLX:
             return [
                 "mlx-community/VibeVoice-ASR-4bit",
+            ]
+        case .whisperMLX:
+            return [
+                "mlx-community/whisper-large-v3-turbo",
+                "mlx-community/whisper-large-v3-mlx",
+                "mlx-community/whisper-medium-mlx-8bit",
+                "mlx-community/whisper-small-mlx-8bit",
             ]
         case .qwen3ASR:
             return [
@@ -133,7 +147,7 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
     }
 
     var isMLXBased: Bool {
-        self == .vibeVoiceMLX || self == .qwen3ASR || self == .qwen3ASRVoiceprint
+        self == .vibeVoiceMLX || self == .whisperMLX || self == .qwen3ASR || self == .qwen3ASRVoiceprint
     }
 
     var isQwen3Based: Bool {
@@ -222,7 +236,7 @@ class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(speakerDiarizationEnabled, forKey: "speakerDiarizationEnabled") }
     }
 
-    @Published var remoteAvailableEngines: [TranscriptionEngine] = [.vibeVoiceMLX, .funASR, .qwen3ASR]
+    @Published var remoteAvailableEngines: [TranscriptionEngine] = [.vibeVoiceMLX, .whisperMLX, .funASR, .qwen3ASR]
 
     init() {
         hfToken = UserDefaults.standard.string(forKey: "hfToken") ?? ""
@@ -251,6 +265,7 @@ class SettingsManager: ObservableObject {
         switch resolvedEngine {
         case .funASR:       validPrefixes = ["paraformer", "fsmn", "iic/", "damo/", "funasr", "FunAudioLLM/"]
         case .vibeVoiceMLX: validPrefixes = ["mlx-community/VibeVoice", "mlx-community/Whisper"]
+        case .whisperMLX:   validPrefixes = ["mlx-community/whisper", "mlx-community/Whisper", "/", "~", "."]
         case .qwen3ASR, .qwen3ASRVoiceprint:
             validPrefixes = ["Qwen/Qwen3-ASR", "Qwen/Qwen3-ForcedAligner"]
         }
@@ -266,7 +281,7 @@ class SettingsManager: ObservableObject {
         remoteServiceURL = UserDefaults.standard.string(forKey: "remoteServiceURL") ?? "http://192.168.3.79:8766"
         remoteTailscaleURL = UserDefaults.standard.string(forKey: "remoteTailscaleURL") ?? ""
         relayServiceURL = UserDefaults.standard.string(forKey: "relayServiceURL") ?? "https://all-serves.openclaw-mini.cn"
-        remoteAvailableEngines = [.vibeVoiceMLX, .funASR, .qwen3ASR]
+        remoteAvailableEngines = [.vibeVoiceMLX, .whisperMLX, .funASR, .qwen3ASR]
         
         if UserDefaults.standard.object(forKey: "speakerDiarizationEnabled") == nil {
             speakerDiarizationEnabled = true

@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
+import AVFoundation
 
 struct ContentView: View {
     @StateObject private var envChecker = EnvironmentChecker()
@@ -8,6 +9,7 @@ struct ContentView: View {
     @StateObject private var settingsManager = SettingsManager()
     @StateObject private var historyManager = HistoryManager()
     @StateObject private var voiceprintStore = VoiceprintStore()
+    @StateObject private var callRecordQueue = CallRecordQueueStore()
     @StateObject private var personTimelineStore = PersonTimelineStore()
     @StateObject private var personOrganizationRunner = PersonOrganizationRunner()
 
@@ -60,14 +62,14 @@ struct ContentView: View {
                 // New Premium Three-Column Layout
                 HStack(spacing: 0) {
                     SidebarView(activeTab: $activeTab, envChecker: envChecker, transcriber: transcriber, settingsManager: settingsManager)
-                    
+
                     Divider()
                         .background(Color.white.opacity(0.08))
-                    
+
                     // Main Workspace
                     VStack(spacing: 0) {
                         HeaderView()
-                        
+
                         ZStack(alignment: .top) {
                             switch activeTab {
                             case .workspace:
@@ -139,6 +141,14 @@ struct ContentView: View {
                 transcriber.pendingHistoryEntry = nil
             }
         }
+        .onChange(of: transcriber.lastRunResult) { result in
+            guard let result else { return }
+            handleCallRecordRunResult(result)
+        }
+        .onChange(of: transcriber.lastSummaryRunResult) { result in
+            guard let result else { return }
+            handleCallRecordSummaryResult(result)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .callRecordArchiveWriterDidWrite)) { notification in
             guard let archiveRoot = notification.object as? URL else {
                 return
@@ -204,7 +214,10 @@ struct ContentView: View {
                 enrollingVoiceprintRoleID = nil
                 enrolledVoiceprintRoleIDs = []
             }
-            if ready && activeTab != .logs {
+            if CallRecordBatchWorkflow.shouldOpenEditor(
+                context: transcriber.currentRunContext,
+                speakerRolesReady: ready
+            ) && activeTab != .logs {
                 activeTab = .editor
             }
         }
@@ -234,23 +247,23 @@ struct ContentView: View {
     }
 
     // MARK: - Header
-    
+
     private func HeaderView() -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(tabTitle(for: activeTab))
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundColor(Color(hex: "8E81F6"))
-                
+
                 if let file = selectedFileURL {
                     Text(file.lastPathComponent)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(Color(hex: "A0A0B0"))
                 }
             }
-            
+
             Spacer()
-            
+
             // Setup Quick Launch
             Button(action: { showSetup = true }) {
                 HStack(spacing: 4) {
@@ -271,7 +284,7 @@ struct ContentView: View {
         .padding(.bottom, 12)
         .background(Color(hex: "12121A").opacity(0.8))
     }
-    
+
     private func tabTitle(for tab: MainTab) -> String {
         switch tab {
         case .workspace: return "工作台"
@@ -286,7 +299,7 @@ struct ContentView: View {
     }
 
     // MARK: - Workspace Tab (工作台)
-    
+
     private var workspaceTab: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -296,7 +309,7 @@ struct ContentView: View {
                     isDragging: $isDragging,
                     onSelect: { showingFilePicker = true }
                 )
-                
+
                 // Action Buttons
                 HStack(spacing: 12) {
                     if transcriber.isTranscribing {
@@ -310,6 +323,30 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(DangerButtonStyle())
+                    } else if settingsManager.executionTarget == .local && envChecker.isSilentInstalling {
+                        SilentInstallProgressCapsule(
+                            status: envChecker.silentInstallStatus,
+                            progress: envChecker.silentInstallProgress
+                        )
+                    } else if settingsManager.executionTarget == .local && envChecker.hasChecked && !envChecker.allReady {
+                        VStack(spacing: 8) {
+                            Button(action: {
+                                envChecker.startSilentDependencyInstall()
+                            }) {
+                                HStack {
+                                    Image(systemName: "sparkles")
+                                    Text("一键准备本地加速库及模型")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(PrimaryButtonStyle())
+
+                            Text("检测到本地运行环境缺失必要组件。点击按钮将在后台自动构建虚拟环境、安装依赖并下载所需模型。")
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(hex: "A0A0B0"))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 12)
+                        }
                     } else {
                         Button(action: {
                             guard settingsManager.executionTarget == .remote || envChecker.hasChecked else {
@@ -342,7 +379,7 @@ struct ContentView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                
+
                 // Progress
                 if transcriber.isTranscribing || transcriber.isSummarizing {
                     VStack(alignment: .leading, spacing: 6) {
@@ -359,7 +396,7 @@ struct ContentView: View {
                         }
                         ProgressView(value: transcriber.progress)
                             .progressViewStyle(LinearProgressViewStyle(tint: Color(hex: "8E81F6")))
-                        
+
                         if transcriber.isTranscribing && !transcriber.isSummarizing {
                             TranscriptionTimelineView(transcriber: transcriber)
                                 .padding(.top, 8)
@@ -367,11 +404,11 @@ struct ContentView: View {
                     }
                     .padding(.horizontal, 24)
                 }
-                
+
                 // Completion Summary
                 if let summary = transcriber.completionSummary {
                     CompletionSummaryCard(summary: summary)
-                    
+
                     // Display Speaker Roles mapping card if diarization was enabled and we have roles
                     if !transcriber.speakerRoles.isEmpty {
                         SpeakerRolesCard(
@@ -388,11 +425,14 @@ struct ContentView: View {
                             },
                             onEnroll: { role in
                                 enrollVoiceprint(role)
+                            },
+                            onAddRole: {
+                                transcriber.addNewSpeakerRole()
                             }
                         )
                         .padding(.top, 8)
                     }
-                    
+
                     // Quick jump to editor button
                     Button(action: { activeTab = .editor }) {
                         HStack {
@@ -477,8 +517,8 @@ struct ContentView: View {
                     outputDir: transcriber.currentOutputDir,
                     onClear: { transcriber.clearLogs() }
                 )
-                    .frame(minHeight: 180)
-                
+                    .frame(height: 300)
+
                 // Settings Panel inside Workspace for fast path tuning
                 SettingsPanel(
                     outputDir: $customOutputDir,
@@ -512,53 +552,215 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Batch Queue Tab (批量队列 - 炫酷占位)
-    
+    // MARK: - Batch Queue Tab
+
     private var batchQueueTab: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            
-            Text("🗂️")
-                .font(.system(size: 64))
-                .shadow(color: Color(hex: "8E81F6").opacity(0.5), radius: 10)
-            
-            Text("多文件并行批量转写队列")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-            
-            Text("支持批量拖入多个音视频文件，后台按队列顺序自动、高性能本地离线转写。")
-                .font(.system(size: 12))
-                .foregroundColor(Color(hex: "A0A0B0"))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-            
-            VStack(alignment: .leading, spacing: 10) {
-                mockQueueRow(file: "01_会议录音_Q3规划.m4a", status: "已完成 ✓", color: "4EC9B0")
-                mockQueueRow(file: "02_播客访谈_探讨大模型.mp3", status: "等待中...", color: "A0A0B0")
-                mockQueueRow(file: "03_视频花絮_产品Demo.mp4", status: "等待中...", color: "A0A0B0")
+        CallRecordBatchQueueView(
+            store: callRecordQueue,
+            isProcessing: transcriber.isTranscribing || transcriber.isSummarizing,
+            currentProgress: transcriber.currentProgress,
+            progress: transcriber.progress,
+            currentAudioPath: transcriber.currentAudioURL?.path,
+            summaryModelName: callRecordSummaryModel?.name,
+            onImportFiles: importCallRecordFiles,
+            onImportFolder: importCallRecordFolder,
+            onStart: startCallRecordQueue,
+            onPause: pauseCallRecordQueue,
+            onResume: resumeCallRecordQueue,
+            onStopCurrent: stopCurrentCallRecordJob,
+            onRetry: retryCallRecordJob,
+            onClearFinished: { callRecordQueue.clearCompletedAndIgnored() },
+            onClearAll: { callRecordQueue.clearAll() }
+        )
+    }
+
+    private func importCallRecordFiles() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.audio, .movie, .mpeg4Movie, .quickTimeMovie]
+        if panel.runModal() == .OK {
+            Task {
+                await callRecordQueue.importFiles(
+                    panel.urls,
+                    outputRoot: callRecordArchiveRoot(),
+                    engine: settingsManager.transcriptionEngine.scriptEngineRawValue,
+                    modelID: settingsManager.transcriptionModelID
+                )
             }
-            .padding(14)
-            .background(Color(hex: "1E1E2E"))
-            .cornerRadius(12)
-            .frame(width: 400)
-            
-            Spacer()
         }
     }
-    
-    private func mockQueueRow(file: String, status: String, color: String) -> some View {
-        HStack {
-            Image(systemName: "doc.audiovisual.fill")
-                .foregroundColor(Color(hex: "8E81F6"))
-            Text(file)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.white)
-            Spacer()
-            Text(status)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(Color(hex: color))
+
+    private func importCallRecordFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            Task {
+                await callRecordQueue.importFolder(
+                    url,
+                    outputRoot: callRecordArchiveRoot(),
+                    engine: settingsManager.transcriptionEngine.scriptEngineRawValue,
+                    modelID: settingsManager.transcriptionModelID
+                )
+            }
         }
-        .padding(.vertical, 4)
+    }
+
+    private func startCallRecordQueue() {
+        guard callRecordSummaryModel != nil else { return }
+        callRecordQueue.start()
+        runNextCallRecordJobIfNeeded()
+    }
+
+    private func pauseCallRecordQueue() {
+        callRecordQueue.pause()
+    }
+
+    private func resumeCallRecordQueue() {
+        callRecordQueue.resume()
+        runNextCallRecordJobIfNeeded()
+    }
+
+    private func stopCurrentCallRecordJob() {
+        callRecordQueue.pause()
+        transcriber.stopCurrentTask()
+    }
+
+    private func retryCallRecordJob(_ job: CallRecordBatchJob) {
+        callRecordQueue.retry(job)
+        runNextCallRecordJobIfNeeded()
+    }
+
+    private func runNextCallRecordJobIfNeeded() {
+        guard !transcriber.isTranscribing, !transcriber.isSummarizing else { return }
+        guard let job = callRecordQueue.nextPendingJob() else {
+            callRecordQueue.stop()
+            return
+        }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: job.outputDirectoryURL,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            callRecordQueue.markFailed(id: job.id, message: "创建输出目录失败: \(error.localizedDescription)")
+            DispatchQueue.main.async { runNextCallRecordJobIfNeeded() }
+            return
+        }
+
+        let engine = settingsManager.transcriptionEngine
+        let modelID = settingsManager.transcriptionModelID.isEmpty ? engine.defaultModelID : settingsManager.transcriptionModelID
+        callRecordQueue.markRunning(job, engine: engine.scriptEngineRawValue, modelID: modelID)
+        transcriber.startTranscription(
+            audioURL: job.sourceURL,
+            outputDir: job.outputDirectoryURL,
+            pythonPath: settingsManager.pythonPath,
+            pythonSitePackages: envChecker.pythonSitePackages,
+            performanceProfile: envChecker.performanceProfile,
+            engine: engine,
+            modelID: modelID,
+            executionTarget: settingsManager.executionTarget,
+            remoteServiceURL: settingsManager.remoteServiceURL,
+            remoteTailscaleURL: settingsManager.remoteTailscaleURL,
+            relayServiceURL: settingsManager.relayServiceURL,
+            speakerDiarizationEnabled: settingsManager.speakerDiarizationEnabled,
+            runContext: .callRecordBatch
+        )
+    }
+
+    private func handleCallRecordRunResult(_ result: TranscriptionRunResult) {
+        guard let job = callRecordQueue.activeJob(for: result.audioPath),
+              job.status == .running else {
+            return
+        }
+
+        let action = CallRecordBatchWorkflow.postTranscriptionAction(
+            success: result.success,
+            cancelled: result.cancelled,
+            errorMessage: result.errorMessage,
+            hasSummaryModel: callRecordSummaryModel != nil
+        )
+        switch action {
+        case .summarize:
+            guard let model = callRecordSummaryModel else {
+                callRecordQueue.markFailed(id: job.id, message: "未配置 AI 摘要模型")
+                scheduleNextCallRecordJob()
+                return
+            }
+            callRecordQueue.markSummarizing(id: job.id)
+            settingsManager.lastSummaryModelID = model.id
+            transcriber.startSummarization(
+                audioURL: job.sourceURL,
+                outputDir: job.outputDirectoryURL,
+                model: model,
+                pythonPath: envChecker.pythonPath,
+                summaryPrompt: settingsManager.summaryPrompt
+            )
+        case .cancel:
+            callRecordQueue.markCancelled(id: job.id)
+            callRecordQueue.pause()
+        case .fail(let message):
+            callRecordQueue.markFailed(id: job.id, message: message)
+            scheduleNextCallRecordJob()
+        }
+    }
+
+    private func handleCallRecordSummaryResult(_ result: SummarizationRunResult) {
+        guard let job = callRecordQueue.activeJob(for: result.audioPath),
+              job.status == .summarizing else {
+            return
+        }
+
+        if result.success {
+            callRecordQueue.markCompleted(id: job.id)
+            if let completedJob = callRecordQueue.jobs.first(where: { $0.id == job.id }) {
+                do {
+                    try CallRecordArchiveWriter.write(
+                        job: completedJob,
+                        allJobs: callRecordQueue.jobs
+                    )
+                } catch {
+                    callRecordQueue.markFailed(
+                        id: job.id,
+                        message: "写入通话索引失败: \(error.localizedDescription)"
+                    )
+                }
+            }
+        } else if result.cancelled {
+            callRecordQueue.markCancelled(id: job.id)
+            callRecordQueue.pause()
+            return
+        } else {
+            callRecordQueue.markFailed(
+                id: job.id,
+                message: result.errorMessage ?? "AI 整理失败"
+            )
+        }
+        scheduleNextCallRecordJob()
+    }
+
+    private func scheduleNextCallRecordJob() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            runNextCallRecordJobIfNeeded()
+        }
+    }
+
+    private var callRecordSummaryModel: LLMModel? {
+        let preferredIDs = [
+            settingsManager.lastSummaryModelID,
+            settingsManager.selectedModel,
+            summaryModelID,
+        ].filter { !$0.isEmpty }
+        for id in preferredIDs {
+            if let model = settingsManager.customModels.first(where: { $0.id == id }) {
+                return model
+            }
+        }
+        return settingsManager.customModels.first
     }
 
     private func callRecordArchiveRoot() -> URL? {
@@ -689,79 +891,81 @@ struct ContentView: View {
     }
 
     // MARK: - Editor Tab (交互校对编辑器)
-    
-    private var editorTab: some View {
-        GeometryReader { geo in
-            if !transcriber.speakerRolesReady {
-                VStack(spacing: 16) {
-                    Spacer()
-                    Image(systemName: "doc.text.magnifyingglass")
-                        .font(.system(size: 48))
-                        .foregroundColor(Color(hex: "A0A0B0").opacity(0.5))
-                    Text("暂无正在校对的逐字稿")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(.white)
-                    Text("请到工作台上传音频文件并开始转写。转写完成后，编辑器将自动解锁字音联动校对功能。")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(hex: "A0A0B0"))
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 320)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(spacing: 0) {
-                    // Split pane layout: Left bubbles | Right insights (Resizable using HSplitView)
-                    HSplitView {
-                        // Left Conversational script editor
-                        VStack(alignment: .leading, spacing: 0) {
-                            ScrollView {
-                                LazyVStack(spacing: 14) {
-                                    // Add SpeakerRolesCard at the very top of the list if we have roles!
-                                    if !transcriber.speakerRoles.isEmpty {
-                                        SpeakerRolesCard(
-                                            roles: transcriber.speakerRoles,
-                                            feedback: speakerRoleFeedback,
-                                            isApplying: isApplyingSpeakerNames,
-                                            enrollingRoleID: enrollingVoiceprintRoleID,
-                                            enrolledRoleIDs: enrolledVoiceprintRoleIDs,
-                                            onChange: { id, newName in
-                                                transcriber.updateSpeakerRole(id: id, displayName: newName)
-                                            },
-                                            onApply: {
-                                                applySpeakerNamesToOutput()
-                                            },
-                                            onEnroll: { role in
-                                                enrollVoiceprint(role)
-                                            }
-                                        )
-                                        .padding(.bottom, 8)
-                                    }
 
-                                    ForEach(transcriber.currentTranscriptSegments.indices, id: \.self) { index in
-                                        let segment = transcriber.currentTranscriptSegments[index]
-                                        segmentRow(index: index, segment: segment)
-                                    }
+    @ViewBuilder
+    private var editorTab: some View {
+        if !transcriber.speakerRolesReady {
+            VStack(spacing: 16) {
+                Spacer()
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 48))
+                    .foregroundColor(Color(hex: "A0A0B0").opacity(0.5))
+                Text("暂无正在校对的逐字稿")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(.white)
+                Text("请到工作台上传音频文件并开始转写。转写完成后，编辑器将自动解锁字音联动校对功能。")
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(hex: "A0A0B0"))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 0) {
+                // Split pane layout: Left bubbles | Right insights (Resizable using HSplitView)
+                HSplitView {
+                    // Left Conversational script editor
+                    VStack(alignment: .leading, spacing: 0) {
+                        ScrollView {
+                            LazyVStack(spacing: 14) {
+                                // Add SpeakerRolesCard at the very top of the list if we have roles!
+                                if !transcriber.speakerRoles.isEmpty {
+                                    SpeakerRolesCard(
+                                        roles: transcriber.speakerRoles,
+                                        feedback: speakerRoleFeedback,
+                                        isApplying: isApplyingSpeakerNames,
+                                        enrollingRoleID: enrollingVoiceprintRoleID,
+                                        enrolledRoleIDs: enrolledVoiceprintRoleIDs,
+                                        onChange: { id, newName in
+                                            transcriber.updateSpeakerRole(id: id, displayName: newName)
+                                        },
+                                        onApply: {
+                                            applySpeakerNamesToOutput()
+                                        },
+                                        onEnroll: { role in
+                                            enrollVoiceprint(role)
+                                        },
+                                        onAddRole: {
+                                            transcriber.addNewSpeakerRole()
+                                        }
+                                    )
+                                    .padding(.bottom, 8)
                                 }
-                                .padding(.vertical, 16)
+
+                                ForEach(transcriber.currentTranscriptSegments.indices, id: \.self) { index in
+                                    let segment = transcriber.currentTranscriptSegments[index]
+                                    segmentRow(index: index, segment: segment)
+                                }
                             }
+                            .padding(.vertical, 16)
                         }
-                        .frame(minWidth: 400, maxWidth: .infinity)
-                        
-                        // Right AI insights panel
-                        AIInsightsPanel(transcriber: transcriber, settingsManager: settingsManager, envChecker: envChecker)
-                            .frame(minWidth: 300, maxWidth: .infinity)
                     }
-                    .padding(.horizontal, 16)
-                    .frame(maxHeight: .infinity)
-                    
-                    // Bottom Audio Controller Panel (translucent bar)
-                    BottomPlaybackControlBar()
+                    .frame(minWidth: 400, maxWidth: .infinity)
+
+                    // Right AI insights panel
+                    AIInsightsPanel(transcriber: transcriber, settingsManager: settingsManager, envChecker: envChecker)
+                        .frame(minWidth: 300, maxWidth: .infinity)
                 }
+                .padding(.horizontal, 16)
+                .frame(maxHeight: .infinity)
+
+                // Bottom Audio Controller Panel (translucent bar)
+                BottomPlaybackControlBar()
             }
         }
     }
-    
+
     private func segmentRow(index: Int, segment: TranscriptSegment) -> some View {
         let isSpeakerA = segment.placeholder.contains("A")
         return HStack(alignment: .top, spacing: 14) {
@@ -769,24 +973,29 @@ struct ContentView: View {
             Button(action: {
                 transcriber.seekAudio(to: segment.start)
             }) {
-                Text(formatTimecode(segment.start))
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(Color(hex: "8E81F6"))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Color(hex: "8E81F6").opacity(0.12))
-                    .cornerRadius(4)
+                VStack(spacing: 2) {
+                    Text(formatTimecode(segment.start))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(Color(hex: "8E81F6"))
+                    Text(String(format: "%.1f秒", max(0.1, segment.end - segment.start)))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(Color(hex: "8E81F6").opacity(0.12))
+                .cornerRadius(5)
             }
             .buttonStyle(.plain)
             .padding(.top, 2)
-            
+
             VStack(alignment: .leading, spacing: 6) {
                 // Speaker badge + Edit controls
                 HStack(alignment: .center) {
                     Menu {
                         ForEach(transcriber.speakerRoles) { role in
                             Button(action: {
-                                transcriber.updateSpeakerRole(id: segment.speakerKey, displayName: role.displayName)
+                                transcriber.updateSegmentSpeaker(index: index, role: role)
                             }) {
                                 Text(role.displayName.isEmpty ? role.placeholder : role.displayName)
                             }
@@ -806,9 +1015,9 @@ struct ContentView: View {
                             )
                     }
                     .menuStyle(.borderlessButton)
-                    
+
                     Spacer()
-                    
+
                     if editingIndex == index {
                         HStack(spacing: 8) {
                             Button(action: {
@@ -824,7 +1033,7 @@ struct ContentView: View {
                                     .cornerRadius(4)
                             }
                             .buttonStyle(.plain)
-                            
+
                             Button(action: {
                                 editingIndex = nil
                             }) {
@@ -869,7 +1078,7 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                
+
                 // Segment Text content
                 if editingIndex == index {
                     TextField("", text: $editingText, axis: .vertical)
@@ -896,21 +1105,21 @@ struct ContentView: View {
         .background(Color.white.opacity(0.02))
         .cornerRadius(10)
     }
-    
+
     private func getSpeakerName(placeholder: String) -> String {
         if let role = transcriber.speakerRoles.first(where: { $0.placeholder == placeholder }) {
             return role.displayName.isEmpty ? role.placeholder : role.displayName
         }
         return placeholder
     }
-    
+
     private func formatTimecode(_ seconds: Double) -> String {
         let total = Int(seconds)
         return String(format: "[%02d:%02d]", total / 60, total % 60)
     }
 
     // MARK: - Bottom Playback Control Bar
-    
+
     private func BottomPlaybackControlBar() -> some View {
         let duration = max(transcriber.audioDuration, 0)
         let sliderRange = 0...max(duration, 1)
@@ -927,7 +1136,7 @@ struct ContentView: View {
             // Waveform
             WaveformVisualizer(isAnimating: transcriber.isAudioPlaying)
                 .padding(.horizontal, 8)
-            
+
             // Audio Controls
             HStack(spacing: 14) {
                 HStack(spacing: 16) {
@@ -941,7 +1150,7 @@ struct ContentView: View {
                             .shadow(color: Color(hex: "8E81F6").opacity(0.4), radius: 6)
                     }
                     .buttonStyle(.plain)
-                    
+
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(formatDuration(transcriber.currentPlaybackTime)) / \(formatDuration(transcriber.audioDuration))")
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -970,13 +1179,13 @@ struct ContentView: View {
                         .frame(width: 42, alignment: .leading)
                 }
                 .frame(maxWidth: .infinity)
-                
+
                 // Speed selection
                 HStack(spacing: 4) {
                     Image(systemName: "speedometer")
                         .font(.system(size: 11))
                         .foregroundColor(Color(hex: "A0A0B0"))
-                    
+
                     ForEach([0.8, 1.0, 1.5, 2.0], id: \.self) { rate in
                         let isActive = abs(transcriber.playbackSpeed - rate) < 0.05
                         Button(action: {
@@ -1005,14 +1214,14 @@ struct ContentView: View {
             }
         )
     }
-    
+
     private func formatDuration(_ seconds: Double) -> String {
         let total = Int(seconds)
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
     // MARK: - Settings Tab (设置面板)
-    
+
     private var settingsTab: some View {
         ScrollView {
             VStack(spacing: 20) {
@@ -1025,11 +1234,11 @@ struct ContentView: View {
                             .font(.system(size: 13, weight: .bold))
                             .foregroundColor(.white)
                     }
-                    
+
                     Text("可以接入支持 OpenAI/Anthropic 协议的各种本地与云端模型。配置保存后，摘要生成器将自动调用此处的模型配置。")
                         .font(.system(size: 11))
                         .foregroundColor(Color(hex: "A0A0B0"))
-                    
+
                     // Simple custom models additions UI placeholder
                     // Linked directly to settingsManager
                     SettingsPanel(
@@ -1071,6 +1280,8 @@ struct ContentView: View {
             message: "正在将 \(speakerName) 加入声纹库...",
             kind: .info
         )
+
+        transcriber.saveTranscriptionChanges()
 
         Task { @MainActor in
             let result = await voiceprintStore.enroll(
@@ -1130,6 +1341,7 @@ private struct SpeakerRolesCard: View {
     var onChange: (String, String) -> Void
     var onApply: () -> Void
     var onEnroll: (SpeakerRole) -> Void
+    var onAddRole: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1205,6 +1417,23 @@ private struct SpeakerRolesCard: View {
                 }
             }
 
+            if let onAddRole = onAddRole {
+                Button(action: onAddRole) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 11))
+                        Text("添加新角色")
+                    }
+                    .foregroundColor(Color(hex: "8E81F6"))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(hex: "8E81F6").opacity(0.12))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+            }
+
             if let feedback {
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: feedbackIcon(for: feedback.kind))
@@ -1250,6 +1479,7 @@ private struct VoiceprintLibraryPanel: View {
     let scriptsDir: URL
     @State private var captureSpeakerName = ""
     @State private var importSourceType: VoiceprintCaptureSourceType = .meeting
+    @State private var selectedProfile: VoiceprintProfile? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1388,30 +1618,38 @@ private struct VoiceprintLibraryPanel: View {
                             Text(profile.displayName)
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundColor(.white)
-                            Text("\(profile.sourceSummary) · \(profile.embeddingStatus)")
+                            Text("\(profile.sourceSummary) · \(profile.embeddingStatus == "ready" ? "特征已生成" : "等待特征提取")")
                                 .font(.system(size: 10))
                                 .foregroundColor(Color(hex: "A0A0B0"))
                         }
                         Spacer()
-                        if let count = profile.selectedSegmentCount {
-                            Text("\(count) 段")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(Color(hex: "4EC9B0"))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color(hex: "4EC9B0").opacity(0.12))
-                                .cornerRadius(4)
-                        }
+                        Text("\(profile.samples.count) 段")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(Color(hex: "4EC9B0"))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(hex: "4EC9B0").opacity(0.12))
+                            .cornerRadius(4)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(Color(hex: "A0A0B0"))
                     }
                     .padding(10)
                     .background(Color(hex: "12121A"))
                     .cornerRadius(8)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedProfile = profile
+                    }
                 }
             }
         }
         .padding(18)
         .background(Color(hex: "1E1E2E").opacity(0.6))
         .cornerRadius(12)
+        .sheet(item: $selectedProfile) { profile in
+            VoiceprintProfileDetailView(profile: profile, store: store)
+        }
     }
 
     private func openVoiceprintImportPanel() {
@@ -1772,5 +2010,303 @@ struct PythonExecutablePicker: NSViewRepresentable {
 
     final class Coordinator {
         var isShowing = false
+    }
+}
+
+struct VoiceprintProfileDetailView: View {
+    let profile: VoiceprintProfile
+    @ObservedObject var store: VoiceprintStore
+    @Environment(\.presentationMode) var presentationMode
+
+    enum DeletionTarget: Identifiable {
+        case profile
+        case sample(VoiceprintSample)
+
+        var id: String {
+            switch self {
+            case .profile:
+                return "profile"
+            case .sample(let sample):
+                return "sample-\(sample.path)"
+            }
+        }
+    }
+
+    @State private var deletionTarget: DeletionTarget? = nil
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "person.crop.circle.badge.questionmark.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(Color(hex: "4EC9B0"))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(profile.displayName)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                    Text("声纹 ID: \(profile.id) · \(profile.embeddingStatus == "ready" ? "特征已生成" : "等待特征提取")")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                }
+                Spacer()
+                Button(action: {
+                    store.stopPlayingSample()
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(Color(hex: "A0A0B0"))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(Color(hex: "1E1E2E"))
+
+            Divider()
+                .background(Color.white.opacity(0.08))
+
+            // Body ScrollView
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Profile Info Card
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("基本信息")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color(hex: "8E81F6"))
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            infoRow(label: "创建时间", value: formatDate(profile.createdAt))
+                            infoRow(label: "更新时间", value: formatDate(profile.updatedAt))
+                            if let model = profile.embeddingModel {
+                                infoRow(label: "声纹模型", value: model)
+                            }
+                            if !profile.sourceAudio.isEmpty {
+                                HStack(alignment: .top) {
+                                    Text("来源音频")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(Color(hex: "A0A0B0"))
+                                        .frame(width: 70, alignment: .leading)
+                                    Text(profile.sourceAudio)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundColor(.white)
+                                        .lineLimit(2)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer()
+                                    if FileManager.default.fileExists(atPath: profile.sourceAudio) {
+                                        Button(action: {
+                                            NSWorkspace.shared.selectFile(profile.sourceAudio, inFileViewerRootedAtPath: "")
+                                        }) {
+                                            Image(systemName: "arrow.right.circle.fill")
+                                                .foregroundColor(Color(hex: "4EC9B0"))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(10)
+                        .background(Color(hex: "12121A"))
+                        .cornerRadius(8)
+                    }
+
+                    // Samples List
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("声纹样本 (\(profile.samples.count)个)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color(hex: "8E81F6"))
+
+                        ForEach(Array(profile.samples.enumerated()), id: \.offset) { index, sample in
+                            HStack(spacing: 12) {
+                                // Play Button
+                                Button(action: {
+                                    store.playSample(path: sample.path)
+                                }) {
+                                    Image(systemName: store.playingSamplePath == sample.path ? "stop.circle.fill" : "play.circle.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(store.playingSamplePath == sample.path ? Color(hex: "FF5C5C") : Color(hex: "4EC9B0"))
+                                }
+                                .buttonStyle(.plain)
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack {
+                                        Text(sample.sourceTitle ?? "转写片段")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1)
+                                            .background(sourceBadgeColor(sample.sourceType).opacity(0.15))
+                                            .cornerRadius(3)
+
+                                        if let durationText = getSampleDurationText(path: sample.path) {
+                                            Text(durationText)
+                                                .font(.system(size: 10, weight: .medium))
+                                                .foregroundColor(Color(hex: "4EC9B0"))
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 1)
+                                                .background(Color(hex: "4EC9B0").opacity(0.12))
+                                                .cornerRadius(3)
+                                        }
+
+                                        if let capturedAt = sample.capturedAt {
+                                            Text(formatDate(capturedAt))
+                                                .font(.system(size: 10))
+                                                .foregroundColor(Color(hex: "A0A0B0"))
+                                        }
+                                    }
+
+                                    Text(sample.path)
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundColor(Color(hex: "A0A0B0"))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+
+                                Spacer()
+
+                                // Finder Button
+                                if FileManager.default.fileExists(atPath: sample.path) {
+                                    Button(action: {
+                                        NSWorkspace.shared.selectFile(sample.path, inFileViewerRootedAtPath: "")
+                                    }) {
+                                        Image(systemName: "folder")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(Color(hex: "A0A0B0"))
+                                            .padding(5)
+                                            .background(Color.white.opacity(0.05))
+                                            .cornerRadius(4)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("在 Finder 中显示样本")
+                                }
+
+                                // Delete Sample Button
+                                Button(action: {
+                                    deletionTarget = .sample(sample)
+                                }) {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(Color(hex: "FF5C5C").opacity(0.8))
+                                        .padding(5)
+                                        .background(Color(hex: "FF5C5C").opacity(0.1))
+                                        .cornerRadius(4)
+                                }
+                                .buttonStyle(.plain)
+                                .help("删除此样本")
+                            }
+                            .padding(8)
+                            .background(Color(hex: "12121A"))
+                            .cornerRadius(8)
+                        }
+                    }
+                }
+                .padding(20)
+            }
+
+            Divider()
+                .background(Color.white.opacity(0.08))
+
+            // Footer / Deletion Area
+            HStack {
+                Button(action: {
+                    deletionTarget = .profile
+                }) {
+                    HStack {
+                        Image(systemName: "trash.fill")
+                        Text("删除声纹")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Color(hex: "FF5C5C").opacity(0.2))
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(hex: "FF5C5C").opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button("关闭") {
+                    store.stopPlayingSample()
+                    presentationMode.wrappedValue.dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(Color(hex: "1E1E2E"))
+        }
+        .frame(width: 550, height: 460)
+        .background(Color(hex: "2A2A3C"))
+        .alert(item: $deletionTarget) { target in
+            switch target {
+            case .profile:
+                return Alert(
+                    title: Text("确认删除整个人物声纹？"),
+                    message: Text("此操作将永久删除人物「\(profile.displayName)」的声纹信息及所有关联的样本文件。"),
+                    primaryButton: .destructive(Text("彻底删除")) {
+                        store.deleteProfile(profile)
+                        presentationMode.wrappedValue.dismiss()
+                    },
+                    secondaryButton: .cancel(Text("取消"))
+                )
+            case .sample(let sample):
+                return Alert(
+                    title: Text("确认删除样本？"),
+                    message: Text("此操作将永久从磁盘删除该声纹样本音频，且不可撤销。"),
+                    primaryButton: .destructive(Text("删除")) {
+                        store.deleteSample(sample, from: profile)
+                    },
+                    secondaryButton: .cancel(Text("取消"))
+                )
+            }
+        }
+    }
+
+    private func infoRow(label: String, value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(Color(hex: "A0A0B0"))
+                .frame(width: 70, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11))
+                .foregroundColor(.white)
+        }
+    }
+
+    private func sourceBadgeColor(_ type: String?) -> Color {
+        switch type {
+        case "direct": return Color(hex: "4EC9B0")
+        case "call": return Color(hex: "FFD35C")
+        case "meeting": return Color(hex: "8E81F6")
+        case "transcript": return Color(hex: "5CB3FF")
+        default: return Color(hex: "A0A0B0")
+        }
+    }
+
+    private func formatDate(_ isoString: String) -> String {
+        let cleaner = isoString.replacingOccurrences(of: "Z", with: "")
+        let parts = cleaner.components(separatedBy: "T")
+        if parts.count == 2 {
+            let datePart = parts[0]
+            let timePart = parts[1].prefix(8)
+            return "\(datePart) \(timePart)"
+        }
+        return isoString
+    }
+
+    private func getSampleDurationText(path: String) -> String? {
+        let url = URL(fileURLWithPath: path)
+        guard let player = try? AVAudioPlayer(contentsOf: url) else {
+            return nil
+        }
+        return String(format: "%.1f秒", player.duration)
     }
 }

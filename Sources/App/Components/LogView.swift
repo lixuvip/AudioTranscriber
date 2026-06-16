@@ -9,6 +9,9 @@ struct LogView: View {
     var outputDir: URL?
     var onClear: (() -> Void)?
 
+    @State private var scrollViewHeight: CGFloat = 0
+    @State private var autoScroll: Bool = true
+
     var body: some View {
         VStack(spacing: 0) {
             terminalHeader
@@ -37,17 +40,80 @@ struct LogView: View {
                                 .id(index)
                             }
                         }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear
+                                        .preference(
+                                            key: ScrollOffsetPreferenceKey.self,
+                                            value: geo.frame(in: .named("scroll")).minY
+                                        )
+                                }
+                            )
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .coordinateSpace(name: "scroll")
+                .background(
+                    GeometryReader { outerGeo in
+                        Color.clear
+                            .onAppear {
+                                self.scrollViewHeight = outerGeo.size.height
+                            }
+                            .onChange(of: outerGeo.size.height) { newHeight in
+                                self.scrollViewHeight = newHeight
+                            }
+                    }
+                )
+                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { minY in
+                    let isAtBottom = minY <= scrollViewHeight + 40
+                    if isAtBottom != autoScroll {
+                        autoScroll = isAtBottom
+                    }
+                }
                 .onChange(of: logs.count) { _ in
-                    if !logs.isEmpty {
+                    if autoScroll && !logs.isEmpty {
                         withAnimation(.easeOut(duration: 0.18)) {
-                            proxy.scrollTo(logs.count - 1, anchor: .bottom)
+                            proxy.scrollTo("bottom", anchor: .bottom)
                         }
                     }
                 }
+                .overlay(
+                    Group {
+                        if !autoScroll && !logs.isEmpty {
+                            VStack {
+                                Spacer()
+                                Button(action: {
+                                    autoScroll = true
+                                    withAnimation(.easeOut(duration: 0.18)) {
+                                        proxy.scrollTo("bottom", anchor: .bottom)
+                                    }
+                                }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "arrow.down.circle.fill")
+                                            .font(.system(size: 10))
+                                        Text("滚回底部")
+                                            .font(.system(size: 10, weight: .semibold))
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color(hex: "8E81F6"))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                                    .shadow(color: Color.black.opacity(0.3), radius: 3, x: 0, y: 1)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.bottom, 8)
+                            }
+                            .transition(.opacity.combined(with: .scale))
+                        }
+                    },
+                    alignment: .bottom
+                )
             }
         }
         .background(Color(hex: "0D0D15"))
@@ -128,5 +194,12 @@ struct LogView: View {
         if line.contains("Qwen3") || line.contains("pyannote") || line.contains("Voiceprint") { return Color(hex: "4EC9B0") }
         if line.contains("[进度]") || line.contains("[INFO]") { return Color(hex: "7C6FE3") }
         return Color(hex: "C0C0D0")
+    }
+}
+
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

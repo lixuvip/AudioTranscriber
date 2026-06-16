@@ -178,6 +178,8 @@ struct StatusCard: View {
             return ["ffmpeg", "python3", "funasr", "models"]
         case .vibeVoiceMLX:
             return ["ffmpeg", "python3", "mlx-audio", "mlx-model"]
+        case .whisperMLX:
+            return ["ffmpeg", "python3", "mlx-whisper", "mlx-model"]
         case .qwen3ASR:
             return ["ffmpeg", "python3", "mlx-qwen3-asr", "qwen3-model"]
         case .qwen3ASRVoiceprint:
@@ -191,6 +193,8 @@ struct StatusCard: View {
             return ["python3", "funasr"]
         case .vibeVoiceMLX:
             return ["python3", "mlx-audio"]
+        case .whisperMLX:
+            return ["python3", "mlx-whisper"]
         case .qwen3ASR:
             return ["python3", "mlx-qwen3-asr"]
         case .qwen3ASRVoiceprint:
@@ -203,6 +207,8 @@ struct StatusCard: View {
         case .funASR:
             return ["models"]
         case .vibeVoiceMLX:
+            return ["mlx-model"]
+        case .whisperMLX:
             return ["mlx-model"]
         case .qwen3ASR:
             return ["qwen3-model"]
@@ -217,6 +223,8 @@ struct StatusCard: View {
             return "安装 FunASR 依赖"
         case .vibeVoiceMLX:
             return "安装 MLX 依赖"
+        case .whisperMLX:
+            return "安装 Whisper MLX 依赖"
         case .qwen3ASR:
             return "安装 Qwen3-ASR 依赖"
         case .qwen3ASRVoiceprint:
@@ -230,6 +238,8 @@ struct StatusCard: View {
             return "下载模型"
         case .vibeVoiceMLX:
             return "下载 MLX 模型"
+        case .whisperMLX:
+            return "下载 Whisper MLX 模型"
         case .qwen3ASR:
             return "下载 Qwen3 模型"
         case .qwen3ASRVoiceprint:
@@ -243,6 +253,8 @@ struct StatusCard: View {
             return "第 1 步：安装 FunASR 依赖"
         case .vibeVoiceMLX:
             return "第 1 步：安装 MLX 依赖"
+        case .whisperMLX:
+            return "第 1 步：安装 Whisper MLX 依赖"
         case .qwen3ASR:
             return "第 1 步：安装 Qwen3-ASR 依赖"
         case .qwen3ASRVoiceprint:
@@ -256,6 +268,8 @@ struct StatusCard: View {
             return "第 2 步：下载模型"
         case .vibeVoiceMLX:
             return "第 2 步：下载 MLX 模型"
+        case .whisperMLX:
+            return "第 2 步：下载 Whisper MLX 模型"
         case .qwen3ASR:
             return "第 2 步：下载 Qwen3 模型"
         case .qwen3ASRVoiceprint:
@@ -268,6 +282,8 @@ struct StatusCard: View {
         case .funASR:
             return true
         case .vibeVoiceMLX:
+            return !isMissingPythonDeps
+        case .whisperMLX:
             return !isMissingPythonDeps
         case .qwen3ASR:
             return !isMissingPythonDeps

@@ -128,6 +128,10 @@ final class VoiceprintStore: ObservableObject {
     @Published var isRecording = false
     @Published var message = ""
     @Published var microphonePermissionStatus = "未知"
+    @Published var playingSamplePath: String? = nil
+
+    private var samplePlayer: AVAudioPlayer?
+    private var playbackTimer: Timer?
 
     let libraryDir: URL
     private var audioRecorder: AVAudioRecorder?
@@ -491,6 +495,113 @@ final class VoiceprintStore: ObservableObject {
         } catch {
             message = "开始录制失败：\(error.localizedDescription)"
         }
+    }
+
+    func playSample(path: String) {
+        if playingSamplePath == path {
+            stopPlayingSample()
+            return
+        }
+
+        stopPlayingSample()
+
+        do {
+            let player = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+            player.prepareToPlay()
+            player.play()
+            self.samplePlayer = player
+            self.playingSamplePath = path
+
+            playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                if let player = self.samplePlayer, !player.isPlaying {
+                    self.stopPlayingSample()
+                }
+            }
+        } catch {
+            message = "无法播放该声纹样本: \(error.localizedDescription)"
+        }
+    }
+
+    func stopPlayingSample() {
+        samplePlayer?.stop()
+        samplePlayer = nil
+        playbackTimer?.invalidate()
+        playbackTimer = nil
+        playingSamplePath = nil
+    }
+
+    func deleteProfile(_ profile: VoiceprintProfile) {
+        stopPlayingSample()
+        let profileDir = libraryDir.appendingPathComponent(profile.id)
+        try? FileManager.default.removeItem(at: profileDir)
+        load()
+        message = "已删除声纹：\(profile.displayName)"
+    }
+
+    func deleteSample(_ sample: VoiceprintSample, from profile: VoiceprintProfile) {
+        stopPlayingSample()
+        let sampleURL = URL(fileURLWithPath: sample.path)
+        try? FileManager.default.removeItem(at: sampleURL)
+
+        let updatedSamples = profile.samples.filter { $0.path != sample.path }
+
+        if updatedSamples.isEmpty {
+            deleteProfile(profile)
+            return
+        }
+
+        var groupsDict: [String: VoiceprintSampleGroup] = [:]
+        for s in updatedSamples {
+            let type = s.sourceType ?? "transcript"
+            let title = s.sourceTitle ?? "转写片段"
+            let currentCount = groupsDict[type]?.sampleCount ?? 0
+
+            let weight: Double
+            switch type {
+            case "direct": weight = 1.0
+            case "call": weight = 0.72
+            case "meeting": weight = 0.78
+            case "transcript": weight = 0.86
+            default: weight = 0.86
+            }
+
+            groupsDict[type] = VoiceprintSampleGroup(
+                sourceType: type,
+                title: title,
+                sampleCount: currentCount + 1,
+                matchWeight: weight,
+                lastUpdatedAt: s.capturedAt ?? ISO8601DateFormatter().string(from: Date())
+            )
+        }
+        let newGroups = Array(groupsDict.values).sorted { $0.sourceType < $1.sourceType }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let nowStr = isoFormatter.string(from: Date())
+
+        let updatedProfile = VoiceprintProfile(
+            id: profile.id,
+            displayName: profile.displayName,
+            speakerKey: profile.speakerKey,
+            createdAt: profile.createdAt,
+            updatedAt: nowStr,
+            sourceAudio: profile.sourceAudio,
+            samples: updatedSamples,
+            sampleGroups: newGroups,
+            embeddingModel: profile.embeddingModel,
+            embeddingStatus: profile.embeddingStatus,
+            requiredModel: profile.requiredModel,
+            selectedSegmentCount: updatedSamples.count
+        )
+
+        let profileURL = libraryDir.appendingPathComponent(profile.id).appendingPathComponent("profile.json")
+        if let data = try? JSONEncoder().encode(updatedProfile) {
+            try? data.write(to: profileURL)
+        }
+
+        load()
+        message = "已删除声纹样本"
     }
 
     private func openTerminal(command: String) {
