@@ -4,7 +4,7 @@
 
 **名称:** VoiceScribe
 **Bundle Identifier:** com.voicescribe.app
-**Core Functionality:** 本地优先音频转写工具，支持 FunASR / VibeVoice MLX / Qwen3-ASR 三引擎、自动说话人分离、LLM 摘要、AI 洞察，以及可选 Mac mini VoiceScribe Server / AllServes relay 远程执行
+**Core Functionality:** 本地优先音频转写工具，支持 FunASR / VibeVoice MLX / Whisper MLX / Qwen3-ASR 多引擎、自动说话人分离、通话记录批量队列、LLM 摘要、AI 洞察，以及可选 Mac mini VoiceScribe Server / AllServes relay 远程执行
 **Target Users:** 需要转录会议、访谈、播客的用户
 **macOS Version:** macOS 13.0+
 **Architecture:** SwiftUI (View) + Python (Backend via Process) + optional FastAPI-style VoiceScribe Server
@@ -23,7 +23,7 @@
 | 标签 | 功能 |
 |------|------|
 | 工作区 (workspace) | 文件拖拽、转写、波形可视化、AI 洞察 |
-| 批量队列 (batchQueue) | 批量音频文件排队转写 |
+| 批量队列 (batchQueue) | 通话记录文件批量导入、过滤、排队转写与归档 |
 | 编辑器 (editor) | 转写结果文本编辑 |
 | 历史 (history) | 转写历史记录搜索与查看 |
 | 设置 (settings) | 引擎/Python/LLM 模型配置 |
@@ -90,6 +90,7 @@
 |------|----------|-------------|------|
 | FunASR + cam++ | `paraformer-zh + cam++` | `iic/speech_SenseVoiceSmall`, `FunAudioLLM/Fun-ASR-Nano-2512` | Mac / Windows |
 | VibeVoice MLX | `mlx-community/VibeVoice-ASR-4bit` | 同上 | Apple Silicon |
+| Whisper MLX | `mlx-community/whisper-large-v3-turbo` | `mlx-community/whisper-large-v3-mlx`, `mlx-community/whisper-medium-mlx-8bit`, `mlx-community/whisper-small-mlx-8bit` | Apple Silicon |
 | Qwen3-ASR | `Qwen/Qwen3-ASR-0.6B` | `Qwen/Qwen3-ASR-1.7B` | Apple Silicon |
 
 **LLM 模型:**
@@ -105,9 +106,11 @@
 - 三引擎各自有独立的依赖检查：
   - FunASR: `funasr`, `modelscope`
   - VibeVoice MLX: `mlx-audio`, `huggingface_hub`
+  - Whisper MLX: `mlx-whisper`, `huggingface_hub`
   - Qwen3-ASR: `mlx-qwen3-asr`, `huggingface_hub`, `pyannote.audio`
 - 缺失时显示警告 + 一键安装按钮
 - 安装日志实时流式输出
+- 环境检测只检查本地包与模型缓存；大模型下载由用户在 App 安装/下载流程中手动触发。
 - `hfToken` 持久化用于下载 HuggingFace 门控模型（pyannote）
 
 ### 3.3 性能管理
@@ -135,7 +138,24 @@
 - relay 模式可使用顶层 `service: "voicescribe"` 作为路由元数据，但不能把转写参数移到顶层字段。
 - `hf_token` 只作为运行参数传递给 Qwen3-ASR / pyannote 子进程，不得在日志、文档、提交或错误消息中暴露真实值。
 - 远程完成后 App 优先按结果 manifest 的 `category` 加载 `transcript`、`speaker_text`、`speaker_map`，再回退到 `*_通话记录.md`、`*_整理版.md`、`*_speaker_map.json` 命名。
-- 远程和 relay 开发不得自动下载大模型、门控模型或付费资源；依赖由用户手动配置和验证。
+- 远程和 relay 开发不得在健康检查或普通验证中自动下载大模型、门控模型或付费资源；依赖由用户手动配置，或在 App 明确点击安装/下载流程时触发。
+
+### 3.4.2 通话记录批量队列
+
+- 通话记录批量功能独立放在 `Sources/App/CallRecords/`，不要和普通单文件工作区逻辑混成一个视图。
+- 支持导入多个文件或一个文件夹，递归扫描 `m4a`、`mp3`、`wav`、`mp4`、`mov`、`aac`、`flac`。
+- 文件名解析规则：
+  - `联系人@号码_yyyyMMddHHmmss`
+  - `号码_yyyyMMddHHmmss`
+- 号码规范化时只保留数字；联系人不存在时使用原始号码作为展示名。
+- 导入阶段读取音频时长，少于 10 秒的录音标记为 `ignored`，不进入转写队列。
+- 队列串行执行，每条按 `转写中 -> AI 整理中 -> 归档完成` 推进；当前条目的 `_摘要.md` 成功生成后才调度下一条。
+- 批量转写使用独立运行上下文，说话人数据就绪时不得触发自动导航到交互校对；普通单文件转写保留原有自动导航。
+- 开始队列前必须存在可用的自定义摘要模型。转写或摘要失败标记当前条目为 `failed` 并继续后续条目；用户停止则暂停队列并将当前条目标记为 `cancelled`。
+- 队列状态持久化到 UserDefaults；App 退出时处于 `running` 或 `summarizing` 的任务下次启动恢复为等待中。
+- 默认归档根目录为源文件所在目录下的 `VoiceScribe_CallRecords`；若用户设置自定义输出目录，则归档在该目录下。
+- 每条已完成通话输出到 `Calls/yyyy/yyyy-MM/yyyyMMdd_HHmmss_<联系人或号码>/`，必须包含转写、speaker map、整理版、AI 摘要和 `metadata.json`。
+- 全局索引文件包括 `call_index.json`、`通话记录索引.md` 和按号码分组的 `Contacts/*.md`，Markdown 索引同时链接整理版与 AI 摘要。
 
 ### 3.5 音频播放
 
@@ -183,6 +203,15 @@
 | `TranscriptionHistoryEntry.swift` | 历史记录 Codable 模型 |
 | `Color+Hex.swift` | 十六进制颜色扩展 |
 
+**通话记录模块 (CallRecords/):**
+| 文件 | 职责 |
+|------|------|
+| `CallRecordModels.swift` | 通话记录元数据、文件名解析、队列任务状态 |
+| `CallRecordBatchWorkflow.swift` | 单文件/批量运行上下文和转写后动作策略 |
+| `CallRecordQueueStore.swift` | 导入、10 秒过滤、队列状态、持久化、任务调度选择 |
+| `CallRecordArchiveWriter.swift` | 每条通话 metadata、全局索引、联系人分组页 |
+| `CallRecordBatchQueueView.swift` | 批量任务标签页 UI |
+
 **组件 (Components/):**
 | 文件 | 职责 |
 |------|------|
@@ -215,8 +244,8 @@
 2. Python 执行转写 → stdout 输出结构化 JSON 进度 + 日志
 3. Swift 解析进度 → 更新进度条、ETA、波形动画
 4. 转写完成 → 写 JSON + Markdown + 说话人映射文件
-5. 用户点摘要 / AI 洞察 → 调用 LLM API → 生成相应内容
-6. 结果自动录入历史
+5. 普通单文件由用户点摘要 / AI 洞察；批量通话由队列在每条转写后自动调用已配置 LLM
+6. 批量摘要成功后写入归档索引并调度下一条，结果同时录入历史
 
 ### SettingsManager 持久化键
 
@@ -255,6 +284,8 @@
 - [ ] 侧边栏标签页切换正常，环境状态实时更新
 - [ ] 设置中的引擎/模型选择正确联动
 - [ ] 远程模式和 AllServes relay 创建任务时转写参数保持在 `arguments`，结果文件能按 `category` 或标准命名加载
+- [ ] 通话记录批量队列能解析 `联系人@号码_yyyyMMddHHmmss` 和 `号码_yyyyMMddHHmmss`，少于 10 秒录音自动忽略
+- [ ] 通话记录队列按通话时间串行执行，每条依次完成转写、AI 摘要和归档，批量期间不自动跳转交互校对
 - [ ] 转写前内存预检在低内存时自动降级并提示
 - [ ] UI 符合深色主题规格
 - [ ] 可打包为 .app 分发
