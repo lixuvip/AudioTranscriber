@@ -43,6 +43,39 @@
 
 **打包脚本**
 - `package_macos_app.sh` 更新为 VoiceScribe 项目名
+- 新增 `package_pkg.sh`，支持本地 `.pkg` 打包
+
+**Whisper MLX 引擎**
+- 新增 `TranscriptionEngine.whisperMLX`，基于 `mlx-whisper` 的 Apple Silicon 本地 Whisper 转写
+- `mlx-whisper` 依赖与模型缓存接入 App 安装/下载流程；检测阶段只查缓存，不下载大模型
+
+**通话记录批量队列**
+- 新增「批量任务」标签页与独立的通话记录队列模块，支持导入多个文件或整个文件夹
+- 文件名解析支持 `联系人@号码_yyyyMMddHHmmss` 与 `号码_yyyyMMddHHmmss`
+- 导入时读取时长，少于 10 秒的录音自动标记为「已忽略」，不进入队列
+- 队列逐条执行 `转写 → AI 整理 → 归档`，当前条目完成后再开始下一条
+- 维护全局 `call_index.json`、`通话记录索引.md` 与按号码分组的 `Contacts/*.md`
+
+**人物归档与时间线工作区**
+- 新增三栏「人物归档」标签页：人物列表 / 通话时间线 / AI 整理
+- 支持手动合并、拆分联系人，合并可撤销
+- 通话选择草稿持久化（`selection_drafts.json`），可按全选 / 近 30 天等批量勾选
+- 版本化的人物 AI 整理（`organization_versions.json`），支持失败后幂等修复
+- 归档数据采用原子写入 + `.backup` 回退（`AtomicJSONFileStore`），损坏时进入只读保护
+
+**声纹库**
+- 转写完成后可将角色「加入声纹库」，后续转写自动匹配已知人物
+- 声纹依赖（pyannote 等）安装到独立 Python 环境，模型按需下载
+
+### 稳定性与性能
+
+- 转写子进程与定时器生命周期加固：定时器幂等启动避免叠加；App 退出时清理仍在运行的 Python 子进程，避免遗留孤儿进程；远程轮询容错，单次网络抖动不再使整单失败
+- `transcribe.py` 预处理临时目录改由 `atexit` 清理，覆盖正常结束、`sys.exit` 与异常退出，杜绝临时文件泄漏
+- 通话队列改为持久化到 `~/Library/Application Support/VoiceScribe/call_record_queue.json`（原子写 + 备份），替代有 ~1MB 上限且非原子的 `UserDefaults`，并自动迁移旧数据
+- 人物归档按电话号码建立通话索引，`calls(for:)` 由每次 O(全部通话) 降为 O(人物电话数)
+- 人物时间线在勾选/全选/清空时不再重建整份通话列表，消除每次点击对全部通话文件的可用性 stat
+- `ContentView` 拆分出自包含 UI 组件文件（`ContentViewComponents.swift`），降低单文件体量
+- `AtomicJSONFileStore` 在键名无法往返时显式报错并附修复指引，避免「驼峰缩写属性」静默丢键
 
 ### 安全
 

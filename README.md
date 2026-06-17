@@ -107,33 +107,45 @@ VoiceScribe/
 │   └── App/
 │       ├── AudioTranscriberApp.swift      # App 入口
 │       ├── ContentView.swift              # 主视图（三栏布局 + 标签页路由）
+│       ├── ContentViewComponents.swift    # ContentView 抽出的自包含 UI 组件
 │       ├── SetupView.swift                # 首次设置/预热页面
 │       ├── EnvironmentChecker.swift       # 环境检测、性能推荐、内存预检
 │       ├── Transcriber.swift              # 转写进程管理 + 音频播放
 │       ├── SettingsManager.swift          # 用户设置持久化（引擎/模型/LLM/HF Token）
+│       ├── HistoryView.swift              # 转写历史列表
 │       ├── TranscriptionHistoryEntry.swift # 历史记录模型
+│       ├── RemoteTranscriberClient.swift  # 远程/中转转写客户端
+│       ├── RemoteModels.swift             # 远程接口数据模型
+│       ├── VoiceprintStore.swift          # 声纹库采集/匹配/管理
+│       ├── KeychainStore.swift            # 令牌等敏感信息的钥匙串存储
 │       ├── Color+Hex.swift                # 颜色扩展
-│       ├── CallRecords/                   # 通话记录批量转写/AI整理工作流、文件名解析、归档索引
+│       ├── CallRecords/                   # 批量队列 + 人物归档/时间线 + 原子文件存储
+│       │   ├── CallRecordQueueStore.swift     # 批量队列状态与持久化
+│       │   ├── CallRecordBatchWorkflow.swift  # 转写→AI整理→归档工作流
+│       │   ├── PersonArchiveRepository.swift  # 人物归档读写（含电话索引）
+│       │   ├── PersonTimelineStore.swift      # 人物时间线/选择草稿状态
+│       │   └── AtomicJSONFileStore.swift      # 原子写入 + .backup 回退
 │       └── Components/
 │           ├── StatusCard.swift           # 环境状态卡片 + 性能档位选择器
 │           ├── FileDropZone.swift         # 文件拖拽区
 │           ├── SettingsPanel.swift        # 设置面板（引擎/Python/LLM/摘要提示）
 │           ├── LogView.swift              # 日志输出
-│           ├── ButtonStyles.swift         # 按钮样式
-│           ├── FolderPicker.swift         # 目录选择器
-│           ├── FolderPickerSheet.swift    # 目录选择 Sheet
 │           ├── SidebarView.swift          # 侧边导航栏（环境状态/系统监控）
 │           ├── WaveformVisualizer.swift   # 波形可视化组件
+│           ├── TranscriptionTimelineView.swift # 转写阶段时间线
+│           ├── SilentInstallProgressCapsule.swift # 静默安装进度条
 │           ├── AIInsightsPanel.swift      # AI 洞察面板（纪要/行动项/宣发）
-│           └── HistoryView.swift          # 转写历史列表
+│           └── ButtonStyles / FolderPicker*.swift # 按钮样式 / 目录选择器
 ├── Scripts/
 │   ├── transcribe.py                      # 多引擎转写脚本（FunASR/VibeVoice MLX/Whisper MLX/Qwen3）
+│   ├── voiceprint.py                      # 声纹采集/匹配脚本（pyannote 等）
 │   └── summarize.py                       # LLM 摘要脚本
 ├── Resources/
 │   ├── Info.plist
 │   └── Assets.xcassets/                   # App 图标
 ├── Tools/
-│   └── package_macos_app.sh               # DMG 打包脚本
+│   ├── package_macos_app.sh               # DMG/zip 打包脚本
+│   └── package_pkg.sh                     # 本地 .pkg 打包脚本
 ├── project.yml                            # XcodeGen 配置
 ├── SPEC.md                                # 项目规格
 └── CHANGELOG.md                           # 变更日志
