@@ -3,6 +3,7 @@ import Combine
 import Darwin
 import AVFoundation
 import Network
+import AppKit
 
 struct SpeakerNameApplyResult: Equatable {
     let success: Bool
@@ -98,6 +99,48 @@ class Transcriber: ObservableObject {
             return Bundle.main.resourceURL!
         }
         return URL(fileURLWithPath: "../../../Scripts") // fallback only for dev, not used in built app
+    }
+
+    init() {
+        // 应用退出时清理仍在运行的子进程，避免遗留孤儿 Python 进程。
+        // willTerminateNotification 在主线程同步派发，selector 直接在主线程执行。
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppWillTerminate),
+            name: NSApplication.willTerminateNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleAppWillTerminate() {
+        terminateActiveProcesses()
+    }
+
+    /// 终止当前正在运行的子进程并拆除所有定时器/IPC 资源。
+    /// 在应用退出时调用，确保不会留下孤儿 Python 进程。
+    func terminateActiveProcesses() {
+        stopMemoryMonitor()
+        stopETATimer()
+        playbackTimer?.invalidate()
+        playbackTimer = nil
+        stopLocalIPCServer()
+
+        if let task = currentTask, task.isRunning {
+            task.terminate()
+            // 给子进程短暂时间做清理（临时文件、IPC），超时后强制结束。
+            let deadline = Date().addingTimeInterval(1.0)
+            while task.isRunning && Date() < deadline {
+                usleep(50_000)
+            }
+            if task.isRunning {
+                kill(task.processIdentifier, SIGKILL)
+            }
+        }
+        currentTask = nil
     }
 
     func startTranscription(
@@ -403,6 +446,8 @@ class Transcriber: ObservableObject {
                 self.startETATimer()
 
                 var isDone = false
+                var consecutivePollFailures = 0
+                let maxConsecutivePollFailures = 5
                 while !isDone {
                     if self.didRequestStop {
                         self.appendLog("正在终止远程任务...")
@@ -417,7 +462,19 @@ class Transcriber: ObservableObject {
                         continue
                     }
 
-                    let status = try await client.taskStatus(taskID: taskID, serviceURL: activeURL, isRelay: isRelay)
+                    // 单次状态查询失败（网络抖动等）不立即终止任务，连续失败到阈值才放弃。
+                    let status: VoiceScribeRemoteTaskStatus
+                    do {
+                        status = try await client.taskStatus(taskID: taskID, serviceURL: activeURL, isRelay: isRelay)
+                        consecutivePollFailures = 0
+                    } catch {
+                        consecutivePollFailures += 1
+                        if consecutivePollFailures >= maxConsecutivePollFailures {
+                            throw error
+                        }
+                        self.appendLog("⚠️ 获取远程任务状态失败（第 \(consecutivePollFailures)/\(maxConsecutivePollFailures) 次），稍后重试：\(error.localizedDescription)")
+                        continue
+                    }
                     self.progress = min(status.progress, 0.99)
                     let remoteStage = status.currentStage ?? self.statusTitle(for: status.status)
                     self.currentProgress = remoteStage
@@ -1115,6 +1172,7 @@ class Transcriber: ObservableObject {
     // MARK: - 内存监控
 
     private func startMemoryMonitor(engine: TranscriptionEngine) {
+        stopMemoryMonitor()
         memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
@@ -1175,6 +1233,7 @@ class Transcriber: ObservableObject {
     // MARK: - ETA 定时刷新
 
     private func startETATimer() {
+        etaTimer?.invalidate()
         etaTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
