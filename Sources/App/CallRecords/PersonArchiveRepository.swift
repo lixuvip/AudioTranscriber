@@ -14,6 +14,10 @@ final class PersonArchiveRepository {
     private(set) var indexEntries: [CallRecordIndexEntry] = []
     private(set) var access: PersonArchiveAccess = .writable
 
+    /// 归一化电话号码 → 该号码的所有通话条目。随 indexEntries 一同重建，
+    /// 让 calls(for:) 从每次 O(全部条目) 降到 O(人物电话数)。
+    private var entriesByPhone: [String: [CallRecordIndexEntry]] = [:]
+
     var people: [PersonRecord] {
         peopleFile.people.sorted { lhs, rhs in
             let comparison = lhs.displayName.localizedStandardCompare(rhs.displayName)
@@ -55,6 +59,7 @@ final class PersonArchiveRepository {
     func load(indexEntries: [CallRecordIndexEntry]? = nil) throws {
         self.indexEntries = try indexEntries
             ?? CallRecordArchiveWriter.loadIndex(from: archiveRoot)
+        rebuildPhoneIndex()
 
         let peopleResult = AtomicJSONFileStore.load(
             PeopleFile.self,
@@ -226,14 +231,23 @@ final class PersonArchiveRepository {
             return []
         }
         let phones = Set(person.phoneNumbers.map(normalizePhone))
-        return indexEntries
-            .filter { phones.contains(normalizePhone($0.normalizedPhone)) }
+        // 每个号码归一化后唯一指向一组条目，号码互不重叠，无需再去重。
+        return phones
+            .flatMap { entriesByPhone[$0] ?? [] }
             .sorted { lhs, rhs in
                 if lhs.callDate == rhs.callDate {
                     return lhs.id < rhs.id
                 }
                 return lhs.callDate > rhs.callDate
             }
+    }
+
+    private func rebuildPhoneIndex() {
+        var index: [String: [CallRecordIndexEntry]] = [:]
+        for entry in indexEntries {
+            index[normalizePhone(entry.normalizedPhone), default: []].append(entry)
+        }
+        entriesByPhone = index
     }
 
     @discardableResult
