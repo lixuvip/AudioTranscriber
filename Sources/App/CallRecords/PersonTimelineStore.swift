@@ -130,26 +130,26 @@ final class PersonTimelineStore: ObservableObject {
             nextSelection.insert(id)
         }
         try repository.setDraftCallIDs(nextSelection, for: selectedPersonID)
-        refreshSelectedPerson(selectedPersonID)
+        refreshSelectionOnly()
     }
 
     func selectAll() throws {
         guard let selectedPersonID, let repository else { return }
         try repository.selectAllAvailableCalls(for: selectedPersonID)
-        refreshSelectedPerson(selectedPersonID)
+        refreshSelectionOnly()
     }
 
     func clearSelection() throws {
         guard let selectedPersonID, let repository else { return }
         try repository.clearDraft(for: selectedPersonID)
-        refreshSelectedPerson(selectedPersonID)
+        refreshSelectionOnly()
     }
 
     func selectRecent30Days(referenceDate: Date = Date()) throws {
         guard let selectedPersonID, let repository else { return }
         let cutoff = referenceDate.addingTimeInterval(-30 * 24 * 60 * 60)
         try repository.selectRecentCalls(for: selectedPersonID, since: cutoff)
-        refreshSelectedPerson(selectedPersonID)
+        refreshSelectionOnly()
     }
 
     func createPerson(displayName: String, phones: [String]) throws {
@@ -331,6 +331,16 @@ final class PersonTimelineStore: ObservableObject {
         }
         selectedCallIDs = repository.draftCallIDs(for: id)
         versions = repository.versions(for: id)
+    }
+
+    /// 仅刷新选择状态。选择类操作（勾选/全选/清空）不改变通话列表与版本，
+    /// 因此无需重建 calls（避免对全部通话重复做文件可用性 stat）。
+    private func refreshSelectionOnly() {
+        guard let selectedPersonID, let repository else {
+            selectedCallIDs = []
+            return
+        }
+        selectedCallIDs = repository.draftCallIDs(for: selectedPersonID)
     }
 
     private func stablePersonID(_ id: String?) -> String? {
