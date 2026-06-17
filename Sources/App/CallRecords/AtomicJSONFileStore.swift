@@ -1,5 +1,13 @@
 import Foundation
 
+/// 原子 JSON 持久化（临时文件 + 原子替换 + .backup 回退）。
+///
+/// 编解码统一使用 snake_case（`convertToSnakeCase` / `convertFromSnakeCase`）。这两者对
+/// 「驼峰 + 尾部缩写」的键名**不可逆**：`modelID → model_id → modelId ≠ modelID`。
+/// 因此任何含此类属性的模型都必须显式声明 `CodingKeys`，并映射到 `convertFromSnakeCase`
+/// 产出的驼峰形式（本仓库约定示例：`case modelID = "modelId"`、`case callIDs = "callIds"`）。
+/// `save(_:to:)` 在写盘前会做一次「编码 → 解码」往返校验；若模型未遵守该约定，会抛出
+/// `StoreError.nonRoundTrippingKeys` 并中止写入，而不是把会丢键的数据落到磁盘。
 enum AtomicJSONFileStore {
     static func load<T: Decodable>(
         _ type: T.Type,
@@ -64,7 +72,18 @@ enum AtomicJSONFileStore {
 
         let encoder = makeEncoder()
         let data = try encoder.encode(value)
-        let decoded = try makeDecoder().decode(T.self, from: data)
+        let decoded: T
+        do {
+            decoded = try makeDecoder().decode(T.self, from: data)
+        } catch {
+            // 解码失败基本都是「驼峰缩写属性 + 缺显式 CodingKeys」导致：snake_case 策略
+            // 不可逆（modelID→model_id→modelId），重解码找不到键。给出可操作的诊断，
+            // 而非把含义不明的 keyNotFound 抛给上层。
+            throw StoreError.nonRoundTrippingKeys(
+                type: String(describing: T.self),
+                detail: String(describing: error)
+            )
+        }
         guard decoded == value else {
             throw StoreError.roundTripMismatch
         }
@@ -175,7 +194,19 @@ enum AtomicJSONFileStore {
         return formatter
     }()
 
-    enum StoreError: Error, Equatable {
+    enum StoreError: Error, Equatable, LocalizedError {
         case roundTripMismatch
+        case nonRoundTrippingKeys(type: String, detail: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .roundTripMismatch:
+                return "编码后再解码的结果与原值不一致，已中止写入以避免数据损坏。"
+            case .nonRoundTrippingKeys(let type, _):
+                return "\(type) 存在无法在 snake_case 策略下往返的键，已中止写入。"
+                    + "请为驼峰缩写属性（如 modelID/personID）添加显式 CodingKeys，"
+                    + "并映射到驼峰形式（例如 case modelID = \"modelId\"）。"
+            }
+        }
     }
 }
