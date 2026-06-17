@@ -10,11 +10,24 @@ final class CallRecordQueueStore: ObservableObject {
     @Published private(set) var isActive = false
     @Published private(set) var isPaused = false
 
-    private let storageKey: String
+    private let storageURL: URL
+    private let legacyDefaultsKey: String?
 
-    init(storageKey: String = "callRecordBatchJobs") {
-        self.storageKey = storageKey
+    init(
+        storageURL: URL? = nil,
+        legacyDefaultsKey: String? = "callRecordBatchJobs"
+    ) {
+        self.storageURL = storageURL ?? Self.defaultStorageURL()
+        self.legacyDefaultsKey = legacyDefaultsKey
         load()
+    }
+
+    private static func defaultStorageURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return base
+            .appendingPathComponent("VoiceScribe", isDirectory: true)
+            .appendingPathComponent("call_record_queue.json")
     }
 
     func importFiles(
@@ -200,12 +213,16 @@ final class CallRecordQueueStore: ObservableObject {
         save()
     }
 
+    private var backupURL: URL {
+        storageURL.appendingPathExtension("backup")
+    }
+
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([CallRecordBatchJob].self, from: data) else {
-            jobs = []
-            return
-        }
+        // 一次性迁移：旧版本把队列存在 UserDefaults，迁到原子文件存储（带备份）。
+        migrateFromUserDefaultsIfNeeded()
+
+        // 主文件损坏时回退到 .backup。
+        let decoded = decodeJobs(from: storageURL) ?? decodeJobs(from: backupURL) ?? []
         jobs = decoded.map { job in
             var item = job
             if item.status == .running || item.status == .summarizing {
@@ -217,9 +234,65 @@ final class CallRecordQueueStore: ObservableObject {
         }
     }
 
+    private func decodeJobs(from url: URL) -> [CallRecordBatchJob]? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode([CallRecordBatchJob].self, from: data)
+    }
+
+    private func migrateFromUserDefaultsIfNeeded() {
+        // 旧数据格式与新文件一致（默认 JSONEncoder），直接落盘即可，无需重编码。
+        guard let key = legacyDefaultsKey,
+              !FileManager.default.fileExists(atPath: storageURL.path),
+              let data = UserDefaults.standard.data(forKey: key),
+              (try? JSONDecoder().decode([CallRecordBatchJob].self, from: data)) != nil else {
+            return
+        }
+        do {
+            try writeAtomically(data)
+            UserDefaults.standard.removeObject(forKey: key)
+        } catch {
+            // 迁移失败保留旧数据，下次启动再试，不影响本次运行。
+            print("[CallRecordQueueStore] 迁移旧队列数据失败: \(error)")
+        }
+    }
+
     private func save() {
         guard let data = try? JSONEncoder().encode(jobs) else { return }
-        UserDefaults.standard.set(data, forKey: storageKey)
+        do {
+            try writeAtomically(data)
+        } catch {
+            // 持久化失败不应中断内存中的队列状态。
+            print("[CallRecordQueueStore] 保存队列失败: \(error)")
+        }
+    }
+
+    /// 原子写入：先备份现有有效文件，再写临时文件并原子替换，避免写一半导致损坏。
+    private func writeAtomically(_ data: Data) throws {
+        let fileManager = FileManager.default
+        let directoryURL = storageURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+        if fileManager.fileExists(atPath: storageURL.path) {
+            if fileManager.fileExists(atPath: backupURL.path) {
+                try? fileManager.removeItem(at: backupURL)
+            }
+            try? fileManager.copyItem(at: storageURL, to: backupURL)
+        }
+
+        let temporaryURL = directoryURL.appendingPathComponent(
+            ".\(storageURL.lastPathComponent).\(UUID().uuidString).tmp"
+        )
+        do {
+            try data.write(to: temporaryURL)
+            if fileManager.fileExists(atPath: storageURL.path) {
+                _ = try fileManager.replaceItemAt(storageURL, withItemAt: temporaryURL)
+            } else {
+                try fileManager.moveItem(at: temporaryURL, to: storageURL)
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporaryURL)
+            throw error
+        }
     }
 
     private static func stableJobID(sourceURL: URL, metadata: CallRecordMetadata?) -> String {

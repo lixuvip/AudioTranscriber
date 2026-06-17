@@ -22,7 +22,10 @@ struct CallRecordQueueCheck {
 
         let outputRoot = root.appendingPathComponent("Archive", isDirectory: true)
         let store = await MainActor.run {
-            CallRecordQueueStore(storageKey: "CallRecordQueueCheck-\(UUID().uuidString)")
+            CallRecordQueueStore(
+                storageURL: root.appendingPathComponent("queue-\(UUID().uuidString).json"),
+                legacyDefaultsKey: nil
+            )
         }
         await store.importFiles(
             [short, long],
@@ -94,7 +97,10 @@ struct CallRecordQueueCheck {
         defer { try? FileManager.default.removeItem(at: outputRoot) }
 
         let store = await MainActor.run {
-            CallRecordQueueStore(storageKey: "CallRecordRealFilesCheck-\(UUID().uuidString)")
+            CallRecordQueueStore(
+                storageURL: outputRoot.appendingPathComponent("queue-\(UUID().uuidString).json"),
+                legacyDefaultsKey: nil
+            )
         }
         await store.importFolder(
             directory,
