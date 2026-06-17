@@ -663,6 +663,18 @@ emit_progress("准备中...", 0)
 t0 = time.time()
 temp_cleanup_dir = None
 
+def cleanup_temp_dir():
+    """删除预处理生成的临时目录。注册到 atexit，确保任何退出路径（含 sys.exit、未捕获异常）都会清理，避免临时 WAV 目录泄漏。"""
+    global temp_cleanup_dir
+    if temp_cleanup_dir and os.path.isdir(temp_cleanup_dir):
+        try:
+            shutil.rmtree(temp_cleanup_dir)
+        except OSError as e:
+            print(f"[VoiceScribe] 清理临时目录失败: {temp_cleanup_dir} ({e})", file=sys.stderr, flush=True)
+    temp_cleanup_dir = None
+
+atexit.register(cleanup_temp_dir)
+
 # ---- 获取音频时长 ----
 audio_duration = get_audio_duration(audio_path)
 if audio_duration:
@@ -928,8 +940,4 @@ if 'model' in dir():
     del model
 gc.collect()
 
-if temp_cleanup_dir and os.path.isdir(temp_cleanup_dir):
-    try:
-        shutil.rmtree(temp_cleanup_dir)
-    except Exception:
-        pass
+# 临时目录由 atexit 注册的 cleanup_temp_dir 统一清理，覆盖正常结束与各 sys.exit / 异常退出路径。
